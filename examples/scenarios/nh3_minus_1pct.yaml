@@ -1,0 +1,14 @@
+# Linear-regime validation scenario: 1% reduction in anthropogenic + BB NH3.
+#
+# Companion to nh3_minus_10pct.yaml and nh3_minus_50pct.yaml. The −1% case
+# stays in the cleanest linear regime where marginal and zero-out are
+# expected to agree closely on all arms.
+
+name: nh3_minus_1pct
+description: >
+  1% reduction in anthropogenic + biomass-burning NH3 (CEDS + GFED5).
+  Linear-regime validation companion to nh3_minus_10pct / -50pct.
+
+factors:
+  ceds_nh3_anthro_2022_monthly.nc: 0.99
+  gfed5_nh3_bb_2022_monthly.nc: 0.99

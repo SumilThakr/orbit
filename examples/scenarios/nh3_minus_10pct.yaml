@@ -1,0 +1,11 @@
+name: nh3_minus_10pct
+description: >
+  10% reduction in anthropogenic + biomass-burning NH3 (CEDS + GFED5).
+  Linear-regime regression check on the chemistry-DAG-only validated
+  case (Phase 5b). After the marg cross-derivative fix, this case
+  should still validate within ~1% — the diagonal is unchanged and
+  the cross-block fix doesn't affect NH3-self-perturbation cleanly.
+
+factors:
+  ceds_nh3_anthro_2022_monthly.nc: 0.90
+  gfed5_nh3_bb_2022_monthly.nc: 0.90

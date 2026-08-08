@@ -1,0 +1,21 @@
+# Reference scenario: 50% reduction in anthropogenic + biomass-burning NH3.
+#
+# Marginal: δe = -0.5 × (CEDS NH3 anthro + GFED5 NH3 BB), then
+#   solve L · δc = -δe with f_marg frozen → δc, δPM2.5.
+# Zero-out: re-runs forward(0.5 × CEDS NH3 + 0.5 × GFED5 NH3 + others
+#   unchanged) and differences against baseline. Captures the
+#   "less NH3 → less ammonium nitrate → more HNO3 stays gas → less pNO3"
+#   regime shift that marginal cannot see.
+#
+# Natural NH3 (geia_nh3_natural) is left untouched — soil/wildlife
+# emissions are policy-irrelevant for an "agricultural NH3 reduction"
+# scenario.
+
+name: nh3_minus_50pct
+description: >
+  50% reduction in anthropogenic + biomass-burning NH3 (CEDS + GFED5).
+  Natural NH3 (GEIA soil) preserved.
+
+factors:
+  ceds_nh3_anthro_2022_monthly.nc: 0.50
+  gfed5_nh3_bb_2022_monthly.nc: 0.50

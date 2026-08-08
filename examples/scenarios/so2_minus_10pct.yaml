@@ -1,0 +1,22 @@
+# Intermediate-perturbation diagnostic: 10% reduction in anthro + BB SO2.
+#
+# Triangulates the SO2 marginal-vs-zero-out validation across scales:
+# - SO2 -1%  (so2_minus_1pct.yaml):  signal small; closure-noise floor
+#   tests whether zero-out becomes unreliable at small δ
+# - SO2 -10% (this file):            mid-range; signal >> noise but
+#   linearisation not yet strained → expect tight marg/zero agreement
+# - SO2 -50% (so2_minus_50pct.yaml): sector-elimination scale; iso
+#   cross-couplings strain linearisation by factor 2-8
+
+name: so2_minus_10pct
+description: >
+  10% reduction in anthropogenic + biomass-burning SO2 (CEDS + GFED5).
+  Intermediate-perturbation triangulation point for SO2 cross-coupling
+  validation.
+
+factors:
+  ceds_so2_anthro_2022_monthly_surface.nc: 0.90
+  ceds_so2_anthro_2022_monthly_low.nc: 0.90
+  ceds_so2_anthro_2022_monthly_medium.nc: 0.90
+  ceds_so2_anthro_2022_monthly_high.nc: 0.90
+  gfed5_so2_bb_2022_monthly.nc: 0.90

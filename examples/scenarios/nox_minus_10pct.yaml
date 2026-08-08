@@ -1,0 +1,22 @@
+# Linear-regime NOx validation: 10% reduction in anthropogenic + BB NOx.
+#
+# Companion to nox_minus_50pct.yaml. Used in the Step 3 cross-coupling
+# validation suite against the v2-perbin baseline. NOx perturbations are
+# the most directly affected by the emission-loader bug (CAMS soil NOx
+# was the contaminating source); a clean NOx -10% validation against
+# the corrected baseline closes the loader-fix verification matrix.
+#
+# Soil NOx (CAMS-GLOB-SOIL) left untouched — natural background, also
+# the source whose path mismatch produced the original bug.
+
+name: nox_minus_10pct
+description: >
+  10% reduction in anthropogenic + biomass-burning NOx (CEDS + GFED5).
+  Natural soil NOx preserved.
+
+factors:
+  ceds_nox_anthro_2022_monthly_surface.nc: 0.90
+  ceds_nox_anthro_2022_monthly_low.nc: 0.90
+  ceds_nox_anthro_2022_monthly_medium.nc: 0.90
+  ceds_nox_anthro_2022_monthly_high.nc: 0.90
+  gfed5_nox_bb_2022_monthly.nc: 0.90

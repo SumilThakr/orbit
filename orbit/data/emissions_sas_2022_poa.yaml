@@ -1,0 +1,101 @@
+# ORBIT South Asia 2022 — default emission manifest.
+#
+# This file describes the published baseline inventory: which emission files
+# make up a run, and how each should be interpreted. It contains no emissions
+# data. The NetCDF files themselves come from the published data archive and
+# are located at run time under ORBIT_EMISSION_DIR.
+#
+# This is the manifest ORBIT uses when --emissions-manifest is not given, and
+# it reproduces the configuration used for the published simulation. To run a
+# different inventory, copy this file, edit it, and pass:
+#
+#     orbit --emissions-manifest my_inventory.yaml ...
+#
+# Every source listed here is required by default: if a file is absent, ORBIT
+# stops rather than silently running with part of the inventory missing. Mark a
+# source "required: false" if it is genuinely optional.
+
+name: sas_2022
+description: >
+  Published ORBIT South Asia 2022 baseline inventory. CEDS anthropogenic
+  (stack-height resolved for PM2.5/SO2/NOx), GFED5 biomass burning, CAMS
+  biogenic VOC / oceanic DMS / soil NOx, GEIA natural NH3, Carn volcanic SO2,
+  and MERRA-2 dust and sea salt.
+
+defaults:
+  units: kg/m2/s
+  time_index: month     # select the month-1 timestep from each monthly file
+
+sources:
+
+  # ── VOC ────────────────────────────────────────────────────────────────
+  # voc_class drives the VBS yield table used to distribute emitted mass
+  # across the five volatility bins. A VOC source with no voc_class
+  # contributes NOTHING to secondary organic aerosol.
+  - file: ceds_voc_anthro_2022_monthly.nc
+    voc_class: anthro                 # per-cell NOx-regime interpolation
+  - file: gfed5_voc_bb_2022_monthly.nc
+    voc_class: biomass_burning
+  - file: cams_bio_voc_2022_monthly.nc
+    voc_class: bio_voc                # split by ORBIT_BIO_VOC_SPLIT
+
+  # ── Primary PM2.5, split into POA and non-absorbing primary ────────────
+  # CEDS anthropogenic is pre-split into four stack-height tiers. The tiers
+  # carry physical stack parameters; the effective injection layer is computed
+  # per cell by the ASME plume-rise algorithm from local met, not fixed here.
+  #
+  # ceds_pm25_anthro_* was itself built as BC + 1.8*OC, so the split back into
+  # POA (= 1.8*OC, absorbing) and other primary (= BC, inert) is exact:
+  # POA + bcoth reproduces the old pm25 tiers to 0.000e+00. POA is transported
+  # separately because it acts as absorbing mass in the VBS Pankow closure and
+  # is the IVOC source. See scripts/build_poa_emissions.py.
+  - file: ceds_poa_anthro_2022_monthly_surface.nc
+  - file: ceds_bcoth_anthro_2022_monthly_surface.nc
+  - file: ceds_poa_anthro_2022_monthly_low.nc
+    stack: {height: 30, diameter: 1.5, temperature: 380, velocity: 10}
+  - file: ceds_bcoth_anthro_2022_monthly_low.nc
+    stack: {height: 30, diameter: 1.5, temperature: 380, velocity: 10}
+  - file: ceds_poa_anthro_2022_monthly_medium.nc
+    stack: {height: 50, diameter: 3, temperature: 380, velocity: 12}
+  - file: ceds_bcoth_anthro_2022_monthly_medium.nc
+    stack: {height: 50, diameter: 3, temperature: 380, velocity: 12}
+  - file: ceds_poa_anthro_2022_monthly_high.nc
+    stack: {height: 220, diameter: 6, temperature: 410, velocity: 20}
+  - file: ceds_bcoth_anthro_2022_monthly_high.nc
+    stack: {height: 220, diameter: 6, temperature: 410, velocity: 20}
+  - file: gfed5_pm25_bb_2022_monthly.nc
+  - file: merra2_dust_pm25_2022_monthly.nc
+  - file: merra2_seasalt_pm25_2022_monthly.nc
+
+  # ── NH3 ────────────────────────────────────────────────────────────────
+  # ~99% surface (agriculture), so no stack tiers.
+  - file: ceds_nh3_anthro_2022_monthly.nc
+  - file: gfed5_nh3_bb_2022_monthly.nc
+  - file: geia_nh3_natural_2022_monthly.nc
+
+  # ── SO2 ────────────────────────────────────────────────────────────────
+  - file: ceds_so2_anthro_2022_monthly_surface.nc
+  - file: ceds_so2_anthro_2022_monthly_low.nc
+    stack: {height: 30, diameter: 1.5, temperature: 380, velocity: 10}
+  - file: ceds_so2_anthro_2022_monthly_medium.nc
+    stack: {height: 50, diameter: 3, temperature: 380, velocity: 12}
+  - file: ceds_so2_anthro_2022_monthly_high.nc
+    stack: {height: 220, diameter: 6, temperature: 410, velocity: 20}
+  - file: gfed5_so2_bb_2022_monthly.nc
+  - file: carn_volcanic_so2_2022_monthly.nc
+  - file: cams_oce_dms_as_so2_climatology_monthly.nc
+
+  # ── NOx ────────────────────────────────────────────────────────────────
+  - file: ceds_nox_anthro_2022_monthly_surface.nc
+  - file: ceds_nox_anthro_2022_monthly_low.nc
+    stack: {height: 30, diameter: 1.5, temperature: 380, velocity: 10}
+  - file: ceds_nox_anthro_2022_monthly_medium.nc
+    stack: {height: 50, diameter: 3, temperature: 380, velocity: 12}
+  - file: ceds_nox_anthro_2022_monthly_high.nc
+    stack: {height: 220, diameter: 6, temperature: 410, velocity: 20}
+  - file: gfed5_nox_bb_2022_monthly.nc
+  - file: cams_soil_nox_climatology_diurnal.nc
+    bin_axis: true
+    note: >
+      Carries its own eight native UTC bins, used directly. Any diurnal
+      profile mapped to this file in the --diurnal-config YAML is ignored.

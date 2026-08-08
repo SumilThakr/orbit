@@ -1,0 +1,15 @@
+name: so2_minus_0pt1pct
+description: >
+  0.1% reduction in anthropogenic + biomass-burning SO2.  Deep-linear
+  regime validation: at this perturbation magnitude, second-order ISORROPIA
+  terms scale as 1e-6 of first-order, so any marg/zo disagreement on
+  iso cross-coupling arms (TotalNH, TotalNO3) MUST come from linear-theory
+  errors rather than nonlinearity.  Companion to so2_minus_1pct (linear-
+  regime), so2_minus_10pct (intermediate), so2_minus_50pct (large).
+
+factors:
+  ceds_so2_anthro_2022_monthly_surface.nc: 0.999
+  ceds_so2_anthro_2022_monthly_low.nc: 0.999
+  ceds_so2_anthro_2022_monthly_medium.nc: 0.999
+  ceds_so2_anthro_2022_monthly_high.nc: 0.999
+  gfed5_so2_bb_2022_monthly.nc: 0.999

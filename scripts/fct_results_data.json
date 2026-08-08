@@ -1,0 +1,55 @@
+{
+  "_provenance": "Measured results of the 2026-08-03 FCT adjoint investigation. Each block records the Slurm job(s) that produced it. Deaths are annualized, January 2022 periodic orbit, CRF gemm5cod.",
+
+  "fd_audit_v2": {
+    "_jobs": "14798245-49 (zero-out forwards), adjoint = run D 14766031",
+    "_note": "dJ_adj includes the /N_BINS correction. Null-subtracted. Gate 1 (bookkeeping) passed at 0.9999; noise floor 4.9e-9 deaths.",
+    "probes": [
+      {"name": "neg1",       "label": "neg1\noff Kerala",   "dJ_adj": -6.4271, "dJ_nonlin": -0.53352, "verdict": "real"},
+      {"name": "neg2",       "label": "neg2\noff Karachi",  "dJ_adj": -5.2709, "dJ_nonlin":  3.3626,  "verdict": "artifact"},
+      {"name": "neg3",       "label": "neg3\nArabian Sea",  "dJ_adj": -4.3804, "dJ_nonlin": -1.9456,  "verdict": "real"},
+      {"name": "poscontrol", "label": "control\nBengaluru", "dJ_adj": 111.23,  "dJ_nonlin": 65.463,   "verdict": "control"}
+    ]
+  },
+
+  "step_size": {
+    "_jobs": "14812479 (q=5%), 14812480 (q=1%), poscontrol 14798248",
+    "_note": "Bengaluru cell. dJ_linear is the linear marginal (job 14810438) scaled exactly; marginal = adjoint to 4 digits.",
+    "points": [
+      {"q_pct": 20, "dJ_nonlin": 65.463, "dJ_linear": 111.22},
+      {"q_pct": 5,  "dJ_nonlin": 17.696, "dJ_linear": 27.805},
+      {"q_pct": 1,  "dJ_nonlin": 3.6032, "dJ_linear": 5.5610}
+    ]
+  },
+
+  "panel": {
+    "_jobs": "14814816-20 (Delhi, IGP, Kolkata, Hyderabad, Dhaka), Bengaluru from 14812480",
+    "_note": "q = 1% of each cell's base primary-PM2.5 rate. truth = S-weighted null-subtracted nonlinear zero-out. Bracket hypothesis (low <= truth <= frozen) VIOLATED at 3/6.",
+    "cells": [
+      {"name": "Delhi",     "lat": 28.50, "lon": 77.50, "truth": 8.1141, "frozen_fct": 6.7585, "low_order": 6.4745, "bracket": false},
+      {"name": "IGP",       "lat": 26.50, "lon": 80.00, "truth": 1.9950, "frozen_fct": 2.0222, "low_order": 1.8151, "bracket": true},
+      {"name": "Kolkata",   "lat": 22.50, "lon": 88.12, "truth": 5.2113, "frozen_fct": 5.0145, "low_order": 5.0706, "bracket": false},
+      {"name": "Hyderabad", "lat": 17.50, "lon": 78.75, "truth": 3.6362, "frozen_fct": 4.5412, "low_order": 3.5300, "bracket": true},
+      {"name": "Dhaka",     "lat": 23.50, "lon": 90.00, "truth": 2.9410, "frozen_fct": 2.0691, "low_order": 2.5367, "bracket": false},
+      {"name": "Bengaluru", "lat": 13.00, "lon": 77.50, "truth": 3.6032, "frozen_fct": 5.5616, "low_order": 2.7864, "bracket": true}
+    ],
+    "summary": {
+      "r_hi_mean": 1.016, "r_hi_min": 0.648, "r_hi_max": 1.421, "r_hi_sem": 0.11,
+      "r_lo_mean": 1.144, "r_lo_min": 1.028, "r_lo_max": 1.293,
+      "bracket_holds": 3, "n": 6
+    }
+  },
+
+  "duality": {
+    "_jobs": "14802365 (adjoint POA), 14802366 (marginal POA pulse), 14810438 (marginal PM25 control)",
+    "poa":  {"adjoint": 11996.0, "forward": 12648.0, "ratio": 0.9485},
+    "pm25": {"adjoint": 111.23,  "forward": 111.22,  "ratio": 0.9999}
+  },
+
+  "eigenvalue": {
+    "_jobs": "14757878 (run C, Picard krylov 1e-6)",
+    "lambda": 1.33,
+    "saturation": 0.2475,
+    "_note": "Two independent reads: Picard residual growth ratio = |lambda|; normalized-residual saturation = (lambda-1)/lambda."
+  }
+}

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.egg-info/
+*.nc
+*.npz
+outputs/
+.pytest_cache/
+
+# Core dumps (segfaults from UMFPACK/MKL); multi-GB, never commit
+core.[0-9]*

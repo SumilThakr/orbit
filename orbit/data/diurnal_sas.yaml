@@ -1,0 +1,183 @@
+# Diurnal emission profile config for the orbit driver (SAS).
+#
+# Usage:
+#   orbit --diurnal-config examples/diurnal_sas.yaml \
+#       --month 1
+#
+# Each profile is a 24-element local-time multiplier with day-mean = 1.0.
+# The orbit driver samples each profile into N_BINS UTC bins via a single
+# SAS-wide IST offset; the bin-mean of the resulting per-bin emission
+# equals the legacy bin-flat result element-wise (budget conserved).
+#
+# Notes:
+#   - The SAS-wide single IST offset is an approximation. It does not
+#     resolve city-level offsets (e.g. east-Bangladesh vs west-Pakistan
+#     differ by ~2 LT). Acceptable as a first-cut paper artefact.
+#   - cams_soil_nox_climatology_diurnal.nc is loaded via the per-bin
+#     NetCDF path (EmissionSource.bin_axis=True in orbit/cli.py).
+#     The YAML mapping for that source is therefore IGNORED at runtime;
+#     it is kept here as documentation in case bin_axis is toggled off.
+#   - source_profiles_by_month overrides take precedence over
+#     source_profiles for matching {month, basename} pairs.
+
+ist_offset_hours: 5.5  # SAS-wide single-offset approximation (IST = UTC+5:30)
+
+profiles:
+  # Indian urban transport (motorbikes, cars, three-wheelers, freight).
+  # Bimodal: morning rush 09-11 LT, evening rush 19-21 LT (Indian commute
+  # times shift later than Western patterns). Daytime trough.
+  # Source: Sahu et al. (2017), ACP, doi:10.5194/acp-17-15049-2017
+  #   "Anthropogenic emissions of NMVOC and NOx in megacities of India"
+  anthro_traffic:
+    hours: [0.4, 0.3, 0.3, 0.3, 0.4, 0.7, 1.2, 1.5, 1.6, 1.5, 1.2, 1.0,
+            1.0, 1.0, 1.0, 1.1, 1.3, 1.5, 1.6, 1.6, 1.4, 1.0, 0.7, 0.4]
+
+  # Indian power + heavy industry. Sustained daytime load with evening
+  # domestic-demand bump; never drops below ~0.5x mean. Two soft peaks at
+  # ~10 LT (morning ramp) and ~18 LT (evening domestic load).
+  # Source: Sharma et al. (2017), Atmospheric Environment,
+  #   doi:10.1016/j.atmosenv.2017.04.020
+  #   "High-resolution emission inventory of an industrial region in India"
+  anthro_industrial:
+    hours: [0.5, 0.5, 0.5, 0.5, 0.6, 0.7, 0.9, 1.1, 1.3, 1.4, 1.4, 1.3,
+            1.2, 1.2, 1.2, 1.2, 1.3, 1.4, 1.4, 1.3, 1.1, 0.9, 0.6, 0.5]
+
+  # Indian residential cooking + heating. Strong bimodal: morning cooking
+  # 06-09 LT, evening cooking 18-22 LT. Very low overnight (0.2-0.3 mean).
+  # Important in IGP winter (heating amplifies the evening peak — see
+  # source_profiles_by_month override for CEDS PM25 below).
+  # Sources:
+  #   Pandey et al. (2014), ES&T, doi:10.1021/es403979q
+  #     "Health and economic impact of household pollution in India"
+  #   Saharia, Kumar et al. (2024), Environmental International:
+  #     IGP residential heating diurnal amplification (winter campaigns)
+  anthro_residential:
+    hours: [0.3, 0.2, 0.2, 0.2, 0.3, 0.6, 1.4, 1.9, 1.8, 1.2, 0.8, 0.7,
+            0.7, 0.7, 0.8, 1.0, 1.4, 1.8, 2.0, 1.9, 1.5, 1.1, 0.8, 0.7]
+
+  # Biogenic VOC (MEGAN-style; PAR x temperature x LAI). Strong solar
+  # peak ~12-13 LT, near-zero overnight. The shape used by CAMS-GLOB-BIO
+  # at sub-daily timesteps in its operational setup.
+  # Source: Sindelarova et al. (2014), ACP, doi:10.5194/acp-14-9317-2014
+  #   "Global data set of biogenic VOC emissions calculated by MEGAN"
+  biogenic:
+    hours: [0.0, 0.0, 0.0, 0.0, 0.0, 0.1, 0.4, 1.0, 1.7, 2.3, 2.7, 2.9,
+            3.0, 2.8, 2.5, 2.0, 1.4, 0.8, 0.3, 0.1, 0.0, 0.0, 0.0, 0.0]
+
+  # Biomass burning (open vegetation fires). Single afternoon peak
+  # ~13-14 LT driven by ABL development and dry fuel availability;
+  # smouldering baseline overnight. WRAP TFF profile.
+  # Source: Mu et al. (2011), JGR Atmospheres, doi:10.1029/2011JD016245
+  #   "Daily and 3-hourly variability in global fire emissions"
+  biomass_burning:
+    hours: [0.3, 0.3, 0.2, 0.2, 0.2, 0.3, 0.5, 0.9, 1.3, 1.7, 2.0, 2.2,
+            2.3, 2.2, 2.0, 1.7, 1.5, 1.2, 0.9, 0.7, 0.5, 0.4, 0.3, 0.2]
+
+  # Natural soil emissions (NH3, NOx). Soil-temperature-driven afternoon
+  # peak 13-15 LT. Smaller diel range than biogenic VOC; never near zero.
+  # Sources:
+  #   Sutton et al. (2013), Phil. Trans. R. Soc. B,
+  #     doi:10.1098/rstb.2013.0166
+  #     "Towards a climate-dependent paradigm of ammonia emission"
+  #   Hu et al. (2014), ACP, doi:10.5194/acp-14-13167-2014
+  #     "Soil NOx emissions in the United States: hourly variability"
+  soil_natural:
+    hours: [0.5, 0.5, 0.5, 0.5, 0.5, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.7,
+            1.8, 1.8, 1.7, 1.6, 1.4, 1.1, 0.9, 0.8, 0.7, 0.6, 0.4, 0.4]
+
+  # Flat (unit) profile — fall-through for sources with no significant
+  # diurnal signal (volcanic degassing, ocean DMS, dust, sea salt).
+  flat:
+    hours: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+source_profiles:
+  # Keys may be an exact basename or a TIER STEM. The CEDS files carry a
+  # stack-height tier suffix (..._surface / _low / _medium / _high) that
+  # postdates this config; profile_for strips it and retries, so the stem
+  # keys below cover all four tiers. Exact keys win over the stem, which is
+  # how the medium/high overrides further down take effect.
+  #
+  # Anything that matches NOTHING now warns rather than silently going
+  # bin-flat -- that silence is what hid the tier mismatch for three months.
+  # Map deliberately-flat sources to 'flat' explicitly to stay quiet.
+
+  # ---- CEDS anthropogenic (5 species) ----
+  # NOx + VOC + PM25 default to traffic (transport-dominated in SAS).
+  # PM25 is overridden to anthro_residential for Dec-Feb (heating).
+  ceds_voc_anthro_2022_monthly.nc: anthro_traffic        # Sahu 2017
+  ceds_pm25_anthro_2022_monthly.nc: anthro_traffic       # winter override below
+  ceds_nox_anthro_2022_monthly.nc: anthro_traffic        # Sahu 2017
+  # SO2 is power+industry dominated; NH3 is cooking+ag dominated.
+  ceds_so2_anthro_2022_monthly.nc: anthro_industrial     # Sharma 2017
+  ceds_nh3_anthro_2022_monthly.nc: anthro_residential    # Pandey 2014
+
+  # ---- POA / other-primary split of CEDS PM2.5 ----
+  # Same CEDS sectors as ceds_pm25_anthro, so the same shapes and the same
+  # Dec-Feb residential override (see source_profiles_by_month).
+  ceds_poa_anthro_2022_monthly.nc: anthro_traffic
+  ceds_bcoth_anthro_2022_monthly.nc: anthro_traffic
+
+  # ---- Tier-specific overrides (exact basenames beat the stem) ----
+  # The tiers ARE sectors: medium = ind, high = ene. Both are industrial /
+  # power load-shaped, not traffic-shaped, in every month including winter.
+  ceds_pm25_anthro_2022_monthly_medium.nc: anthro_industrial
+  ceds_pm25_anthro_2022_monthly_high.nc: anthro_industrial
+  ceds_poa_anthro_2022_monthly_medium.nc: anthro_industrial
+  ceds_poa_anthro_2022_monthly_high.nc: anthro_industrial
+  ceds_bcoth_anthro_2022_monthly_medium.nc: anthro_industrial
+  ceds_bcoth_anthro_2022_monthly_high.nc: anthro_industrial
+  ceds_nox_anthro_2022_monthly_medium.nc: anthro_industrial
+  ceds_nox_anthro_2022_monthly_high.nc: anthro_industrial
+  # SO2/NH3 tiers inherit their stem profile (already industrial/residential).
+
+  # ---- GFED5 biomass burning (5 species; same shape) ----
+  gfed5_voc_bb_2022_monthly.nc: biomass_burning          # Mu 2011
+  gfed5_pm25_bb_2022_monthly.nc: biomass_burning
+  gfed5_nox_bb_2022_monthly.nc: biomass_burning
+  gfed5_so2_bb_2022_monthly.nc: biomass_burning
+  gfed5_nh3_bb_2022_monthly.nc: biomass_burning
+
+  # ---- Biogenic VOC (1 file) ----
+  cams_bio_voc_2022_monthly.nc: biogenic                 # Sindelarova 2014
+
+  # ---- Natural / climatology ----
+  geia_nh3_natural_2022_monthly.nc: soil_natural         # Sutton 2013
+  # cams_soil_nox_climatology_diurnal.nc is loaded as per-bin NetCDF in
+  # orbit/cli.py (bin_axis=True). The YAML mapping below is
+  # IGNORED at runtime; kept as documentation of the underlying signal
+  # in case bin_axis is toggled off.
+  cams_soil_nox_climatology_diurnal.nc: soil_natural     # Hu 2014 / Sutton 2013
+
+  # ---- Explicitly flat (no significant diurnal signal) ----
+  # Mapped rather than left to fall through, so that the fall-through
+  # warning means "something is genuinely unmapped" and not "business as
+  # usual". Reasons per source below.
+  merra2_dust_pm25_2022_monthly.nc: flat        # wind-driven, but monthly on disk
+  merra2_seasalt_pm25_2022_monthly.nc: flat     # same as dust
+  carn_volcanic_so2_2022_monthly.nc: flat       # degassing, near-constant
+  cams_oce_dms_as_so2_climatology_monthly.nc: flat   # subtle; not worth a shape
+
+source_profiles_by_month:
+  # Winter IGP residential heating amplifies the residential evening
+  # peak in CEDS PM25 anthro (Dec-Feb). Switches CEDS PM25 from a
+  # traffic-shaped curve to a residential cooking+heating shape.
+  # See Pandey 2014 (cooking) + Saharia/Kumar 2024 (winter heating
+  # amplification in the IGP).
+  #
+  # Keyed on the stem, so all four tiers pick it up -- EXCEPT medium/high,
+  # whose exact-basename industrial mapping above takes precedence. That is
+  # deliberate: power and heavy industry do not switch to a cooking shape
+  # in winter, only the surface (residential/traffic) and waste tiers do.
+  12:
+    ceds_pm25_anthro_2022_monthly.nc: anthro_residential
+    ceds_poa_anthro_2022_monthly.nc: anthro_residential
+    ceds_bcoth_anthro_2022_monthly.nc: anthro_residential
+  1:
+    ceds_pm25_anthro_2022_monthly.nc: anthro_residential
+    ceds_poa_anthro_2022_monthly.nc: anthro_residential
+    ceds_bcoth_anthro_2022_monthly.nc: anthro_residential
+  2:
+    ceds_pm25_anthro_2022_monthly.nc: anthro_residential
+    ceds_poa_anthro_2022_monthly.nc: anthro_residential
+    ceds_bcoth_anthro_2022_monthly.nc: anthro_residential

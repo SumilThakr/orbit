@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orbit"
+version = "1.0.0"
+description = "ORBIT: sparse steady-state atmospheric transport + source-receptor model"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = ["numpy", "scipy", "xarray", "netCDF4", "pyyaml", "matplotlib", "numba"]
+
+[project.optional-dependencies]
+# Strongly recommended. The default LU backend is UMFPACK; without it ORBIT
+# falls back to SuperLU, which is slower and needs roughly 1.5-2x more memory
+# on this grid. scikit-umfpack needs SuiteSparse, so it is an extra rather
+# than a hard requirement: conda install -c conda-forge scikit-umfpack
+fast = ["scikit-umfpack"]
+# Used by the default (auto) backend for the nested-dissection ordering:
+# 1.3x faster, 25% less peak memory than UMFPACK+COLAMD on the January
+# solve. Without it, auto falls back to UMFPACK+COLAMD with a warning.
+metis = ["pymetis"]
+# rasterio is needed by the subdistrict aggregation (rasterio.features);
+# without it the gridded pipeline still runs, only the admin-2 rollup fails.
+geo = ["geopandas>=0.12", "shapely>=2.0", "rasterio"]
+dev = ["pytest", "pytest-cov", "geopandas>=0.12", "shapely>=2.0"]
+
+[project.scripts]
+orbit = "orbit.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["orbit*"]
+
+[tool.setuptools.package-data]
+orbit = ["data/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: loads real data"]
+
+[tool.black]
+line-length = 100

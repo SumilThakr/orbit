@@ -1,0 +1,21 @@
+# Reference scenario: 50% reduction in anthropogenic + BB NOx.
+#
+# Marginal: δe = -0.5 × (CEDS NOx anthro + GFED5 NOx BB). Solves NOx +
+#   TotalNO3 (DAG cascade); δc_pSO4 = δc_NH = 0 in marginal mode.
+# Zero-out: full forward with halved NOx → captures the secondary effect
+#   that less NOx → less HNO3 → frees NH3 → could shift NH4-NO3
+#   partitioning toward gas-phase HNO3 in NH-rich cells.
+#
+# Soil NOx (CAMS-GLOB-SOIL) left untouched — natural background.
+
+name: nox_minus_50pct
+description: >
+  50% reduction in anthropogenic + biomass-burning NOx (CEDS + GFED5).
+  Natural soil NOx preserved.
+
+factors:
+  ceds_nox_anthro_2022_monthly_surface.nc: 0.50
+  ceds_nox_anthro_2022_monthly_low.nc: 0.50
+  ceds_nox_anthro_2022_monthly_medium.nc: 0.50
+  ceds_nox_anthro_2022_monthly_high.nc: 0.50
+  gfed5_nox_bb_2022_monthly.nc: 0.50

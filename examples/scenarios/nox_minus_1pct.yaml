@@ -1,0 +1,17 @@
+# Linear-regime validation scenario: 1% reduction in anthropogenic + BB NOx.
+#
+# Companion to nox_minus_10pct.yaml and nox_minus_50pct.yaml. The −1% case
+# stays in the cleanest linear regime where marginal and zero-out are
+# expected to agree closely on all arms.
+
+name: nox_minus_1pct
+description: >
+  1% reduction in anthropogenic + biomass-burning NOx (CEDS + GFED5).
+  Linear-regime validation companion to nox_minus_10pct / -50pct.
+
+factors:
+  ceds_nox_anthro_2022_monthly_surface.nc: 0.99
+  ceds_nox_anthro_2022_monthly_low.nc: 0.99
+  ceds_nox_anthro_2022_monthly_medium.nc: 0.99
+  ceds_nox_anthro_2022_monthly_high.nc: 0.99
+  gfed5_nox_bb_2022_monthly.nc: 0.99

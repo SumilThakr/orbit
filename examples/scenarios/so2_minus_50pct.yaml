@@ -1,0 +1,22 @@
+# Reference scenario: 50% reduction in anthropogenic + BB SO2.
+#
+# Marginal: δe = -0.5 × (CEDS SO2 anthro + GFED5 SO2 BB). Solves SO2 +
+#   pSO4 (DAG cascade). δPM2.5 dominated by S_TO_SO4 × δc_pSO4 — the
+#   sulfate term is direct, no partitioning regime dependence.
+# Zero-out: captures the "less SO4 → less NH3 demand → more NH3 gas →
+#   different NH4-NO3 partitioning" cascade that marginal misses.
+#
+# Volcanic SO2 (CARN) and oceanic DMS-as-SO2 (CAMS) left untouched —
+# both are natural background, not policy-relevant.
+
+name: so2_minus_50pct
+description: >
+  50% reduction in anthropogenic + biomass-burning SO2 (CEDS + GFED5).
+  Volcanic and DMS-derived SO2 preserved.
+
+factors:
+  ceds_so2_anthro_2022_monthly_surface.nc: 0.50
+  ceds_so2_anthro_2022_monthly_low.nc: 0.50
+  ceds_so2_anthro_2022_monthly_medium.nc: 0.50
+  ceds_so2_anthro_2022_monthly_high.nc: 0.50
+  gfed5_so2_bb_2022_monthly.nc: 0.50

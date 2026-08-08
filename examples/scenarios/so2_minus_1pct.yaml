@@ -1,0 +1,20 @@
+# Linear-regime validation scenario: 1% reduction in anthropogenic + BB SO2.
+#
+# Companion to so2_minus_50pct.yaml. The −50% case sits at the upper end
+# of "sector-level" perturbations and demonstrates linearisation breakdown
+# on iso cross-couplings (TotalNH, TotalNO3); the −1% case stays in the
+# linear regime where marginal and zero-out are expected to agree closely
+# on all four arms (SO2 + pSO4 chemistry-DAG, TotalNH + TotalNO3 iso
+# cross-couplings).
+
+name: so2_minus_1pct
+description: >
+  1% reduction in anthropogenic + biomass-burning SO2 (CEDS + GFED5).
+  Linear-regime validation companion to so2_minus_50pct.
+
+factors:
+  ceds_so2_anthro_2022_monthly_surface.nc: 0.99
+  ceds_so2_anthro_2022_monthly_low.nc: 0.99
+  ceds_so2_anthro_2022_monthly_medium.nc: 0.99
+  ceds_so2_anthro_2022_monthly_high.nc: 0.99
+  gfed5_so2_bb_2022_monthly.nc: 0.99
