@@ -41,7 +41,6 @@ def main() -> int:
         orbit_lat=ds.lat.values,
         orbit_lon=ds.lon.values,
         bbox=BBOX,
-        sub_factor=5,
         verbose=True,
     )
     print(f"layer: {layer.gid_list.size} subdistricts, "

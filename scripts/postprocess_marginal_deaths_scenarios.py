@@ -74,11 +74,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--gadm", type=Path, required=True,
                     help="GADM v4.1 gpkg path (admin-2 polygons); download "
                          "from gadm.org (licence prohibits redistribution).")
-    ap.add_argument("--bbox", type=float, nargs=4,
-                    default=[60.0, 4.0, 100.0, 36.0],
-                    metavar=("lon_min", "lat_min", "lon_max", "lat_max"))
-    ap.add_argument("--sub-factor", type=int, default=5,
-                    help="Sub-cell rasterisation factor (matches aggregator).")
+    ap.add_argument("--bbox", type=float, nargs=4, default=None,
+                    metavar=("lon_min", "lat_min", "lon_max", "lat_max"),
+                    help="Clip the polygons to this box; the default is the "
+                         "outer edges of the ORBIT grid.")
     ap.add_argument("--out-dir", type=Path, required=True,
                     help="Output dir; one scenarios_<crf>.nc per CRF.")
     args = ap.parse_args(argv)
@@ -99,8 +98,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── 1. Build the subdistrict layer once (uses the first CRF's first adjoint
     # NetCDF to get the orbit grid).
-    print(f"Building GADM admin-2 layer (bbox lon{args.bbox[0]}..{args.bbox[2]}, "
-          f"lat{args.bbox[1]}..{args.bbox[3]})...")
+    print("Building GADM admin-2 layer by exact cell intersection...")
     t0 = time.time()
     first_adj = sorted((args.production_dir / args.crf[0]).glob("adjoint_M*.nc"))[0]
     ds0 = xr.open_dataset(first_adj)
@@ -110,8 +108,7 @@ def main(argv: list[str] | None = None) -> int:
     layer = build_subdistrict_layer(
         gadm_gpkg=str(args.gadm),
         orbit_lat=orbit_lat, orbit_lon=orbit_lon,
-        bbox=tuple(args.bbox),
-        sub_factor=args.sub_factor,
+        bbox=tuple(args.bbox) if args.bbox else None,
         verbose=True,
     )
     print(f"  layer built in {time.time() - t0:.1f}s "

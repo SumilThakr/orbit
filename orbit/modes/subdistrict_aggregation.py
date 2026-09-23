@@ -9,17 +9,18 @@ emitted uniformly across the subdistrict, sustained year-round".
 Implementation
 --------------
 
-1. Load GADM admin-2 polygons, filter to the ORBIT bbox.
-2. Rasterize each polygon at sub-cell resolution (factor K=5 → 0.1° ×
-   0.125° sub-cells of the ORBIT grid) and aggregate sub-cells to the
-   coarse ORBIT grid with per-(cell, gid) area fractions.
+1. Load GADM admin-2 polygons and clip them to the ORBIT grid (or a
+   given bbox).
+2. Intersect each polygon with every ORBIT grid cell it overlaps and
+   measure the area of each piece in an equal-area projection, which
+   gives exact per-(cell, gid) area fractions. Every polygon with
+   positive area gets at least one entry, however small it is next to
+   a cell.
 3. For each subdistrict S: deaths_per_1000kg(p, τ, S) =
    (1000 / SECONDS_PER_YEAR) · area_weighted_mean(∂J/∂e_p,τ in S).
 
-Sub-cell rasterisation (instead of whole-cell) buys us correct boundary
-attribution at the cost of ~20× more polygon-vs-cell intersections; on
-the SAS bbox (~1500 admin-2 × ~4600 surface cells × K²=25 sub-cells)
-the cost is still <30 s.
+On the South Asian grid (about 2,000 admin-2 polygons and 4,600 surface
+cells) the overlay takes a few seconds once the polygons are loaded.
 """
 from __future__ import annotations
 
@@ -104,40 +105,50 @@ def build_subdistrict_layer(
     gadm_gpkg: str,
     orbit_lat: np.ndarray,
     orbit_lon: np.ndarray,
-    bbox: tuple[float, float, float, float],   # (lon_min, lat_min, lon_max, lat_max)
-    sub_factor: int = 5,
+    bbox: tuple[float, float, float, float] | None = None,   # (lon_min, lat_min, lon_max, lat_max)
     verbose: bool = True,
 ) -> SubdistrictLayer:
-    """Build the per-cell × per-subdistrict overlay.
+    """Build the per-cell × per-subdistrict overlay by exact intersection.
 
-    Algorithm: rasterize each clipped admin-2 polygon at sub_factor×
-    sub_factor sub-cell resolution; count sub-cells per (coarse-cell,
-    gid); convert counts to per-(cell, gid) area fractions.
+    Every admin-2 polygon is clipped to ``bbox`` (by default the outer
+    edges of the ORBIT grid), dissolved by GID_2, and intersected with
+    each grid cell it overlaps. The area of every (cell ∩ polygon) piece
+    is measured in an equal-area projection and divided by the projected
+    area of the cell, which gives the fraction of the cell that the
+    polygon covers. A polygon with positive area therefore always gets at
+    least one entry, however small it is next to a cell, and a polygon
+    that lies inside one cell gets that cell alone.
     """
     import geopandas as gpd
-    from rasterio.features import rasterize
-    from rasterio.transform import from_origin
+    import shapely
+    from shapely.geometry import box
+
+    ny = orbit_lat.size
+    nx = orbit_lon.size
+    dlat = float(orbit_lat[1] - orbit_lat[0])
+    dlon = float(orbit_lon[1] - orbit_lon[0])
+    if bbox is None:
+        bbox = (float(orbit_lon[0] - dlon / 2), float(orbit_lat[0] - dlat / 2),
+                float(orbit_lon[-1] + dlon / 2), float(orbit_lat[-1] + dlat / 2))
+    bbox = tuple(float(b) for b in bbox)
+    bbox_geom = box(*bbox)
 
     if verbose:
         print("  Loading GADM admin-2 polygons...")
-    gdf = gpd.read_file(gadm_gpkg, columns=["GID_0", "GID_2", "NAME_2", "geometry"])
-    gdf = gdf[gdf["GID_2"].notna() & (gdf["GID_2"] != "")]
-    # Clip to the ORBIT bbox.
-    from shapely.geometry import box
-    bbox_geom = box(*bbox)
+    gdf = gpd.read_file(gadm_gpkg, columns=["GID_0", "GID_2", "NAME_2", "geometry"],
+                        bbox=bbox)
+    gdf = gdf[gdf["GID_2"].notna() & (gdf["GID_2"] != "")].copy()
+    # Repair invalid rings before any overlay; GADM v4.1 has a few.
+    gdf["geometry"] = gdf.geometry.make_valid()
     gdf = gdf[gdf.intersects(bbox_geom)].copy()
     gdf["geometry"] = gdf["geometry"].intersection(bbox_geom)
     gdf = gdf[~gdf["geometry"].is_empty]
     if verbose:
-        n_pre_dissolve = len(gdf)
-        n_unique = gdf["GID_2"].nunique()
-        print(f"  {n_pre_dissolve} polygon rows ({n_unique} unique GID_2) "
+        print(f"  {len(gdf)} polygon rows ({gdf['GID_2'].nunique()} unique GID_2) "
               f"in bbox (lon {bbox[0]}..{bbox[2]}, lat {bbox[1]}..{bbox[3]})")
     # Dissolve duplicate GID_2 entries — GADM v4.1 splits MultiPolygons
-    # across multiple rows (islands, non-contiguous districts). Without
-    # dissolving, each row is rasterised independently and the same
-    # subdistrict gets multiple sparse entries with different gid_idx
-    # values, breaking the area-weighted-mean math.
+    # across multiple rows (islands, non-contiguous districts), and every
+    # subdistrict must be one polygon with one gid_idx.
     if gdf["GID_2"].duplicated().any():
         gdf = gdf.dissolve(
             by="GID_2",
@@ -146,82 +157,40 @@ def build_subdistrict_layer(
         )
         if verbose:
             print(f"  Dissolved → {len(gdf)} unique admin-2 polygons.")
+    gdf = gdf.sort_values("GID_2", ignore_index=True)
 
-    # Build the sub-cell raster: K * ny rows × K * nx cols.
-    ny = orbit_lat.size
-    nx = orbit_lon.size
-    K = int(sub_factor)
-    if K < 1:
-        raise ValueError(f"sub_factor must be >= 1; got {K}")
-    dlat = float(orbit_lat[1] - orbit_lat[0])
-    dlon = float(orbit_lon[1] - orbit_lon[0])
-    sub_dlat = dlat / K
-    sub_dlon = dlon / K
-    sub_ny = ny * K
-    sub_nx = nx * K
-    # rasterio expects "north-up" affine: y0 at top, dy negative.
-    lat_max = float(orbit_lat[-1] + dlat / 2)
-    lon_min = float(orbit_lon[0] - dlon / 2)
-    transform = from_origin(lon_min, lat_max, sub_dlon, sub_dlat)
-
-    # Burn shapes; cell value = position+1 in gdf (0 = sentinel-unassigned).
-    # Area-descending order so small polygons survive in their fine sub-cells.
-    # (Compute the area column explicitly — `key=lambda g: -g.area` on a
-    # plain Series of geometry objects fails: that path goes through
-    # pandas' generic Series, which doesn't expose .area; the GeoSeries
-    # accessor only kicks in on the geometry column itself.)
-    gdf = gdf.assign(_burn_area=gdf.geometry.area)
-    gdf = gdf.sort_values("_burn_area", ascending=False, ignore_index=True)
-    gdf = gdf.drop(columns=["_burn_area"])
-    shapes = [(geom, idx + 1) for idx, geom in enumerate(gdf["geometry"])]
-    raster = rasterize(
-        shapes=shapes,
-        out_shape=(sub_ny, sub_nx),
-        transform=transform,
-        fill=0,
-        dtype=np.uint32,
+    # Grid cells as boxes with flat index y * nx + x, in the polygons' CRS.
+    lon2d, lat2d = np.meshgrid(orbit_lon, orbit_lat)
+    cells = gpd.GeoSeries(
+        shapely.box(lon2d.ravel() - dlon / 2, lat2d.ravel() - dlat / 2,
+                    lon2d.ravel() + dlon / 2, lat2d.ravel() + dlat / 2),
+        crs=gdf.crs,
     )
+
+    # Candidate (cell, polygon) pairs from the spatial index, then the
+    # exact intersection of each pair and its area in an equal-area
+    # projection, as a fraction of the cell's projected area.
+    cell_pos, gid_pos = gdf.sindex.query(cells.to_numpy(), predicate="intersects")
+    pieces = shapely.intersection(cells.to_numpy()[cell_pos],
+                                  gdf.geometry.to_numpy()[gid_pos])
+    equal_area = "EPSG:6933"
+    piece_area = gpd.GeoSeries(pieces, crs=gdf.crs).to_crs(equal_area).area.to_numpy()
+    cell_area_proj = cells.to_crs(equal_area).area.to_numpy()
+    frac = piece_area / cell_area_proj[cell_pos]
+    keep = frac > 0.0
+    cell_idx = cell_pos[keep].astype(np.int32)
+    gid_idx = gid_pos[keep].astype(np.int32)
+    frac = frac[keep].astype(np.float64)
     if verbose:
-        unique = np.unique(raster)
-        print(f"  Sub-raster {sub_ny}×{sub_nx}, "
-              f"{(raster > 0).sum() / raster.size * 100:.1f}% land coverage, "
-              f"{len(unique) - 1} distinct admin-2 hits")
-
-    # Aggregate to coarse cells. raster is "north-up" (top row = lat_max).
-    # ORBIT lat array is ASCENDING (lat_min first). Flip rows so that
-    # raster_ascending[0] = bottom (lat_min).
-    raster_asc = raster[::-1, :]
-    # Reshape (sub_ny, sub_nx) → (ny, K, nx, K) and count per (cell, gid).
-    blocks = raster_asc.reshape(ny, K, nx, K)
-
-    # For each coarse cell (y, x), iterate over its K×K sub-cells. Build
-    # sparse (cell_flat, gid_idx, frac) entries.
-    cell_idx_list = []
-    gid_idx_list = []
-    frac_list = []
-    K_sq = float(K * K)
-    for y in range(ny):
-        for x in range(nx):
-            block = blocks[y, :, x, :].ravel()
-            block = block[block > 0]  # drop unassigned
-            if block.size == 0:
-                continue
-            uniq, counts = np.unique(block, return_counts=True)
-            cell_flat = y * nx + x
-            for ug, c in zip(uniq, counts):
-                cell_idx_list.append(cell_flat)
-                gid_idx_list.append(int(ug) - 1)   # shape index back to 0-based
-                frac_list.append(float(c) / K_sq)
+        covered = np.bincount(gid_idx, minlength=len(gdf)) > 0
+        print(f"  {cell_idx.size} cell·gid pairs; {int(covered.sum())} of "
+              f"{len(gdf)} polygons have positive area")
 
     # Cell areas (lat-dependent, lon-uniform within ORBIT).
     cell_row_area = _cell_area_km2(orbit_lat, dlat, dlon)   # (ny,)
     cell_area_2d = np.broadcast_to(
         cell_row_area[:, None], (ny, nx)
     ).ravel().astype(np.float64)
-
-    cell_idx = np.array(cell_idx_list, dtype=np.int32)
-    gid_idx = np.array(gid_idx_list, dtype=np.int32)
-    frac = np.array(frac_list, dtype=np.float64)
     area_per_entry = frac * cell_area_2d[cell_idx]
 
     # Total district areas (sum of (cell ∩ district) areas).

@@ -7,6 +7,7 @@ area-weighted averages.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from orbit.modes.subdistrict_aggregation import (
     SubdistrictLayer,
@@ -93,3 +94,44 @@ def test_aggregator_empty_district_returns_zero():
     expected_A = 100 * 5 * factor / 200
     expected_B = 100 * 5 * factor / 400
     np.testing.assert_allclose(out[0], [expected_A, expected_B])
+
+
+def test_layer_exact_intersection_keeps_small_polygons(tmp_path):
+    """A polygon smaller than a cell still gets the cell it lies in, and a
+    polygon that straddles two cells is split between them by area."""
+    gpd = pytest.importorskip("geopandas")
+    from shapely.geometry import box
+    from orbit.modes.subdistrict_aggregation import build_subdistrict_layer
+
+    # 2 x 2 grid with 0.5-degree cells, edges lon 20..21 and lat 10..11.
+    lat = np.array([10.25, 10.75])
+    lon = np.array([20.25, 20.75])
+    polys = gpd.GeoDataFrame({
+        "GID_0": ["XXX"] * 3,
+        "GID_2": ["XXX.1.1_1", "XXX.1.2_1", "XXX.1.3_1"],
+        "NAME_2": ["West", "Tiny", "Straddle"],
+        "geometry": [box(20.0, 10.0, 20.5, 11.0),
+                     box(20.6, 10.1, 20.62, 10.12),
+                     box(20.7, 10.3, 21.0, 10.7)],
+    }, crs="EPSG:4326")
+    path = tmp_path / "gadm.gpkg"
+    polys.to_file(path, driver="GPKG")
+
+    layer = build_subdistrict_layer(gadm_gpkg=str(path), orbit_lat=lat,
+                                    orbit_lon=lon, verbose=False)
+    assert list(layer.gid_list) == ["XXX.1.1_1", "XXX.1.2_1", "XXX.1.3_1"]
+    assert (layer.gid_area_km2 > 0).all()
+    frac = layer.area_km2 / layer.cell_area_km2[layer.cell_idx]
+    # West covers the two x = 0 cells (flat indices 0 and 2) completely.
+    west = layer.gid_idx == 0
+    assert set(layer.cell_idx[west].tolist()) == {0, 2}
+    assert np.allclose(frac[west], 1.0, atol=1e-6)
+    # Tiny lies inside cell 1 alone, covering about 0.0016 of it.
+    tiny = layer.gid_idx == 1
+    assert layer.cell_idx[tiny].tolist() == [1]
+    assert 0.001 < frac[tiny][0] < 0.002
+    # Straddle is split between cells 1 and 3, about half its area each.
+    strad = layer.gid_idx == 2
+    assert set(layer.cell_idx[strad].tolist()) == {1, 3}
+    shares = layer.area_km2[strad] / layer.gid_area_km2[2]
+    assert np.allclose(shares, 0.5, atol=0.02)
