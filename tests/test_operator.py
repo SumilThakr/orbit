@@ -67,9 +67,12 @@ class TestTransportBlock:
         W = (dx_3d * g.dP).ravel()
         WT = (W @ T.toarray()).reshape(nz, ny, nx)
 
-        # Fully-interior cells: all six face fluxes stay in-domain, so the
-        # weighted column sum cancels to machine precision.
-        interior = WT[1:nz - 1, 1:ny - 1, 1:nx - 1]
+        # Every layer of a laterally interior column: the ground and the
+        # domain top are closed and the fixture's CMFMC lid is closed, so the
+        # weighted column sum cancels to machine precision in layers 0 and
+        # nz-1 as well as in between. (Until 2026-09-25 this check started at
+        # layer 1, which hid the flux through the ground.)
+        interior = WT[:, 1:ny - 1, 1:nx - 1]
         assert np.allclose(interior, 0.0, atol=1e-9), (
             f"Max interior |W^T T|: {np.max(np.abs(interior))}"
         )

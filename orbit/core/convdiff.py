@@ -510,18 +510,11 @@ def assemble_vertical_convdiff(
         cols_list.append(n_k)
         vals_list.append(-(coeff_L / safe_dz_k1)[idx])
 
-    # Ground face (k=0 bottom): downward omega_plus[0] is a loss from the
-    # surface layer through the ground, exactly as assemble_vertical_advection
-    # applies it. Pure upwind advective boundary flux (no diffusion through the
-    # ground). With the height-coords conversion, omega_plus[0]/rho_g/Dz[0]
-    # reduces to omega_plus[0]/dP[0] (production's form). The upward ground
-    # component omega_minus[0] has no source below and is skipped (matching
-    # production). Without this term the prototype would silently drop a real
-    # surface-layer sink and the comparison would not be like-for-like.
-    valid_g = (Dz[0] > 0) & (dP[0] > 0)
-    safe_dP0 = np.where(dP[0] > 0, dP[0], 1.0)
-    diag[0] += np.where(valid_g & (omega_plus[0] > 0),
-                        omega_plus[0] / safe_dP0, 0.0)
+    # Ground face (k=0 bottom): closed, as in assemble_vertical_advection.
+    # omega[0] holds the preprocessor's layer-0 mid-level value, not a ground
+    # flux; applying it here as a loss (as this prototype did until
+    # 2026-09-25, matching production at the time) leaked surface-layer
+    # tracer into the ground. No term is added.
 
     diag_pos = diag > 0
     if np.any(diag_pos) or rows_list:

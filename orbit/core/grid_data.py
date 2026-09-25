@@ -270,6 +270,10 @@ def load_grid(preprocessor_path: str, constants_path: Optional[str] = None,
     # omega here is the HYBRID CROSS-LEVEL velocity (terrain-corrected in the
     # preprocessor: omega - V.grad_eta(P); see meteorology.hybrid_cross_omega),
     # NOT raw pressure velocity. Used directly as the cross-model-level flux.
+    # The field is cell-centred (nz values). The solver reads omega[k] as the
+    # flux through the bottom face of layer k and never uses omega[0]: the
+    # ground is closed, and omega[0] is the layer-0 mid-level value, not a
+    # ground flux (see assemble_vertical_advection).
     g.omega = np.asarray(raw["omega"], dtype=np.float64)
 
     # Split-flux omega averages: if preprocessor has pre-split fields, use them.

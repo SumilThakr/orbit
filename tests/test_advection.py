@@ -86,7 +86,16 @@ class TestVerticalAdvection:
         assert T.nnz == 0
 
     def test_with_subsidence(self, small_grid_params):
-        """Uniform downward motion (omega > 0) should produce non-zero matrix."""
+        """Uniform downward motion (omega > 0) should produce non-zero matrix.
+
+        Above the surface every layer loses through its bottom face what it
+        gains through its top face, so row sums vanish. The surface layer
+        only gains: the ground is closed, so uniform subsidence converges
+        there at the rate omega / dP_0 (in a real wind field the horizontal
+        divergence carries it away). Until 2026-09-25 the operator let that
+        air leave through the ground, and this test asserted a zero surface
+        row sum.
+        """
         params = dict(small_grid_params)
         params["omega"] = np.full_like(params["omega"], 0.01)  # 0.01 Pa/s downward
         g = _make_grid(params)
@@ -94,9 +103,9 @@ class TestVerticalAdvection:
         T = assemble_vertical_advection(g, idx)
 
         assert T.nnz > 0
-        # Row sums should be >= 0
-        row_sums = np.array(T.sum(axis=1)).ravel()
-        assert np.all(row_sums >= -1e-10)
+        row_sums = np.array(T.sum(axis=1)).ravel().reshape(g.nz, g.ny, g.nx)
+        assert np.all(row_sums[1:] >= -1e-10)
+        assert np.allclose(row_sums[0], -0.01 / g.dP[0])
 
 
 class TestSplitOmega:
@@ -202,10 +211,14 @@ class TestSplitOmega:
             f"Split diag sum ({split_diag_sum}) < net ({net_diag_sum})"
 
     def test_row_sums_nonnegative(self, small_grid_params):
-        """Row sums should be >= 0 for physically consistent omega.
+        """Row sums vanish above the surface under uniform subsidence.
 
-        Use uniform subsidence (divergence-free) so row sums reflect
-        the operator, not artifacts of non-physical synthetic data.
+        Uniform subsidence is divergence-free between layers, so every
+        interior row sums to zero. The top row sums to +omega / dP_top
+        (loss only, since nothing enters through the domain top) and the
+        surface row to -omega / dP_0 (gain only, since the ground is closed
+        and the descending air converges in layer 0; see
+        TestVerticalAdvection.test_with_subsidence).
         """
         params = dict(small_grid_params)
         nz, ny, nx = params["nz"], params["ny"], params["nx"]
@@ -218,5 +231,63 @@ class TestSplitOmega:
         idx = CellIndexer(g.nz, g.ny, g.nx)
         T = assemble_vertical_advection(g, idx)
 
-        row_sums = np.array(T.sum(axis=1)).ravel()
-        assert np.all(row_sums >= -1e-10), f"Min row sum: {row_sums.min()}"
+        row_sums = np.array(T.sum(axis=1)).ravel().reshape(nz, ny, nx)
+        assert np.allclose(row_sums[1:-1], 0.0, atol=1e-10), f"Max |row sum|: {np.abs(row_sums[1:-1]).max()}"
+        assert np.allclose(row_sums[-1], 0.01 / g.dP[-1])   # top layer: loss only, nothing enters from above
+        assert np.allclose(row_sums[0], -0.01 / g.dP[0])    # surface: gain only, the ground is closed
+
+
+class TestGroundClosure:
+    """No air crosses the ground: the bottom face of layer 0 carries no flux.
+
+    The preprocessor stores cell-centred omega, so omega[0] is the layer-0
+    mid-level value. Until 2026-09-25 the assembly applied omega_plus[0] as a
+    downward loss from the surface layer with no receiving cell, which removed
+    tracer into the ground at about three times the dry-deposition rate on the
+    2022 South Asia grids. These tests pin the closed ground.
+    """
+
+    @staticmethod
+    def _weighted_column_sums(g, T):
+        """W^T T with W = dP * area: the net rate at which each source cell's
+        mass leaves the domain through the operator (zero when conserved)."""
+        dx_3d = np.broadcast_to(g.dx[None, :, None], (g.nz, g.ny, g.nx))
+        W = (dx_3d * g.dP).ravel()
+        return (W @ T.toarray()).reshape(g.nz, g.ny, g.nx)
+
+    def test_subsidence_conserves_surface_mass(self, small_grid_params):
+        """Uniform subsidence: every column sum vanishes, layer 0 included,
+        and layer 0 itself has no loss term (nothing lies below it)."""
+        params = dict(small_grid_params)
+        params["omega"] = np.full_like(params["omega"], 0.02)
+        g = _make_grid(params)
+        idx = CellIndexer(g.nz, g.ny, g.nx)
+        T = assemble_vertical_advection(g, idx)
+
+        WT = self._weighted_column_sums(g, T)
+        assert np.allclose(WT, 0.0, atol=1e-12), f"max |W^T T| = {np.abs(WT).max()}"
+        diag0 = T.diagonal().reshape(g.nz, g.ny, g.nx)[0]
+        assert np.all(diag0 == 0.0)
+
+    def test_surface_omega_is_ignored(self, small_grid_params):
+        """omega_plus[0] and omega_minus[0] do not enter the operator, in the
+        vectorised assembly and in the loop reference alike."""
+        params = dict(small_grid_params)
+        nz, ny, nx = params["nz"], params["ny"], params["nx"]
+        rng = np.random.RandomState(7)
+        params["omega_plus"] = rng.uniform(0.001, 0.02, (nz, ny, nx))
+        params["omega_minus"] = rng.uniform(0.001, 0.01, (nz, ny, nx))
+        params["omega"] = params["omega_plus"] - params["omega_minus"]
+        params["has_split_omega"] = True
+        g = _make_grid(params)
+        idx = CellIndexer(g.nz, g.ny, g.nx)
+
+        T_ref = assemble_vertical_advection(g, idx)
+        loop_ref = _assemble_vertical_advection_loop(g, idx)
+        g.omega_plus[0] = 0.0
+        g.omega_minus[0] = 0.0
+        T_zeroed = assemble_vertical_advection(g, idx)
+
+        assert abs(T_ref - T_zeroed).max() == 0.0
+        assert abs(T_ref - loop_ref).max() < 1e-12
+        assert np.allclose(self._weighted_column_sums(g, T_ref), 0.0, atol=1e-12)

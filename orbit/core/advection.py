@@ -388,7 +388,12 @@ def assemble_vertical_advection(grid: GridData, indexer: CellIndexer) -> sp.csc_
 
     Interface convention:
     - omega[k] is at the bottom face of layer k (= top face of layer k-1)
-    - omega[0] = ground surface
+    - omega[0] would be the ground surface. It is ignored, because the
+      ground is closed (no air crosses it). The preprocessor stores
+      cell-centred omega, so omega[0] holds the layer-0 mid-level value,
+      not a ground flux; until 2026-09-25 it was applied as a downward loss
+      with no receiving cell and removed surface-layer tracer into the
+      ground at about three times the dry-deposition rate.
     - Top of domain (above layer nz-1) = zero flux (not stored)
 
     Parameters
@@ -417,19 +422,20 @@ def assemble_vertical_advection(grid: GridData, indexer: CellIndexer) -> sp.csc_
     cols_list = []
     vals_list = []
 
-    # Bottom face (interface k): omega_plus[k] is downward, omega_minus[k] is upward
+    # Bottom face (interface k): omega_plus[k] is downward, omega_minus[k] is
+    # upward. Both apply only for k > 0: the bottom face of layer 0 is the
+    # ground, which is closed, so omega[0] never enters the operator.
     w_bot_down = omega_plus   # (nz, ny, nx) >= 0
     w_bot_up = omega_minus    # (nz, ny, nx) >= 0
+    has_below = np.zeros((nz, ny, nx), dtype=bool)
+    has_below[1:, :, :] = True
 
-    # Downward at bottom face: loss from layer k
-    bot_down = valid & (w_bot_down > 0)
+    # Downward at bottom face: loss from layer k (received by k-1 below)
+    bot_down = valid & has_below & (w_bot_down > 0)
     diag += np.where(bot_down, w_bot_down / safe_dP, 0.0)
 
     # Upward at bottom face: gain at k from k-1
     bot_up = valid & (w_bot_up > 0)
-    # Only for k > 0
-    has_below = np.zeros((nz, ny, nx), dtype=bool)
-    has_below[1:, :, :] = True
     bot_up_interior = bot_up & has_below
 
     n_below = np.zeros_like(n3d)
@@ -644,10 +650,11 @@ def _assemble_vertical_advection_loop(grid: GridData, indexer: CellIndexer) -> s
                 n = indexer.to_flat(k, j, i)
                 diag = 0.0
 
-                # Bottom face: downward = loss, upward = gain from below
+                # Bottom face: downward = loss, upward = gain from below.
+                # The ground (k = 0) is closed: neither term applies there.
                 w_down = omega_plus[k, j, i]
                 w_up = omega_minus[k, j, i]
-                if w_down > 0:
+                if w_down > 0 and k > 0:
                     diag += w_down / dp
                 if w_up > 0 and k > 0:
                     n_below = indexer.to_flat(k - 1, j, i)
