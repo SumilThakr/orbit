@@ -138,9 +138,23 @@ def _molmol_to_ugm3(X, species, rho_air=None):
     return X * rho_air * (MW[species] / MW_AIR) * 1e9
 
 
+def density_on_levels(lev_sigma, orbit_sigma, orbit_rho):
+    """Air density on the climatology's levels from the model's own column.
+
+    For each climatology level (sigma-like coordinate) take the model layer
+    whose domain-mean sigma is nearest, the same nearest-layer rule as
+    ``layer_slice_by_sigma``. Returns (n_lev, ny, nx) kg/m3.
+    """
+    lev = np.asarray(lev_sigma, dtype=np.float64).ravel()
+    sig = np.asarray(orbit_sigma, dtype=np.float64).ravel()
+    rho = np.asarray(orbit_rho, dtype=np.float64)
+    pick = np.array([int(np.argmin(np.abs(sig - l))) for l in lev])
+    return rho[pick]
+
+
 def load_hemco_climatology(year, month, target_lats, target_lons,
                            rho_air=None, hemco_dir=DEFAULT_HEMCO_DIR,
-                           with_jvalues=True):
+                           with_jvalues=True, rho_profile=None):
     """Load monthly-mean GC climatology regridded to ORBIT's horizontal grid.
 
     Parameters
@@ -150,9 +164,14 @@ def load_hemco_climatology(year, month, target_lats, target_lons,
     target_lats, target_lons : ndarray
         ORBIT grid cell centers (1D arrays in degrees).
     rho_air : ndarray or None
-        If provided, shape (nz, ny, nx) or (ny, nx) in kg/m3. If None, a
-        scalar 1.2 kg/m3 is used; fields are still in ug/m3 but units are
-        rough (use mol/mol for accurate calculations).
+        If provided, shape (nz_hemco, ny, nx) or (ny, nx) in kg/m3. If None
+        and ``rho_profile`` is None, a scalar 1.2 kg/m3 is used, which is
+        wrong aloft by the density profile; pass ``rho_profile`` instead.
+    rho_profile : (orbit_sigma, orbit_rho) or None
+        The model's own column density: ``orbit_sigma`` (nz,) domain-mean
+        sigma of each model layer and ``orbit_rho`` (nz, ny, nx) kg/m3.
+        Mapped onto the climatology's levels by nearest sigma
+        (``density_on_levels``) and used for the mol/mol to ug/m3 conversion.
     hemco_dir : str
         Root of the HEMCO archive (default: cluster path).
     with_jvalues : bool
@@ -188,6 +207,8 @@ def load_hemco_climatology(year, month, target_lats, target_lons,
                             lats=np.asarray(target_lats),
                             lons=np.asarray(target_lons),
                             lev_centers=lev_centers)
+    if rho_air is None and rho_profile is not None:
+        rho_air = density_on_levels(lev_centers, rho_profile[0], rho_profile[1])
 
     # Species fields
     for sp in SPECIES_KEYS:
