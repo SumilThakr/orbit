@@ -138,7 +138,7 @@ class TestStructure:
 class TestUnits:
     def test_kg_ha_yr_conversion(self):
         """1 ug/m2/s over a year is 31.5576 g/m2 = 315.576 kg/ha."""
-        seconds_per_year = 365.0 * 24 * 3600
+        seconds_per_year = 365.25 * 24 * 3600
         expected = 1e-9 * seconds_per_year * 1e4  # kg/m2/yr -> kg/ha/yr
         assert UG_M2_S_TO_KG_HA_YR == pytest.approx(expected, rel=1e-3)
 

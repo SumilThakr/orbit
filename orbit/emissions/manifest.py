@@ -312,8 +312,9 @@ class EmissionManifest:
         return "\n".join(lines)
 
 
-#: Seconds in a 365-day year, for annualising a monthly emission rate.
-_SECONDS_PER_YEAR = 365.0 * 24.0 * 3600.0
+#: Seconds in a Julian year, for annualising a monthly emission rate; the
+#: same value as ``orbit.emissions.sources.SECONDS_PER_YEAR``.
+_SECONDS_PER_YEAR = 365.25 * 24.0 * 3600.0
 
 
 def source_mass_budget(sources, grid, indexer, verbose=False):

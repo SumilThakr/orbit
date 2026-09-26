@@ -23,7 +23,7 @@ class EmissionSource:
         Rate units (mass per time, converted to ug/s internally):
             - "kg/s"         Kilograms per second
             - "ug/s"         Micrograms per second (native internal rate)
-            - "kg/year"      Kilograms per year (annualized rate, 365-day year)
+            - "kg/year"      Kilograms per year (annualized rate, 365.25-day year)
             - "tons/year"    US short tons per year (1 ton = 907.185 kg)
             - "tonnes/year"  Metric tonnes per year (1 tonne = 1000 kg)
 
@@ -89,7 +89,10 @@ class EmissionSource:
 # Physical constants
 # =============================================================================
 
-SECONDS_PER_YEAR = 365.0 * 24.0 * 3600.0
+# Julian year, as in deposition_maps.UG_M2_S_TO_KG_HA_YR and the health
+# post-processing (subdistrict_aggregation.SECONDS_PER_YEAR). Until 2026-09-26
+# the emissions path used 365 days, a 0.07% offset from the rest of the model.
+SECONDS_PER_YEAR = 365.25 * 24.0 * 3600.0
 R_EARTH = 6378137.0  # Earth radius [m] (WGS84, matches grid_data.py)
 
 # Molar masses [g/mol]

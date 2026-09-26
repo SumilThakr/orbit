@@ -116,9 +116,9 @@ class TestUnitConversions:
     """Test unit conversion factors."""
 
     def test_kg_per_year(self):
-        """1 kg/year ~ 31.71 ug/s."""
+        """1 kg/year ~ 31.69 ug/s (Julian year, 365.25 days)."""
         factor = UNIT_CONVERSIONS['kg/year']
-        expected = 1e9 / (365.0 * 24.0 * 3600.0)
+        expected = 1e9 / (365.25 * 24.0 * 3600.0)
         assert abs(factor - expected) < 1e-6
 
     def test_ug_per_s(self):
