@@ -14,6 +14,7 @@ from orbit.core.advection import assemble_vertical_advection
 from orbit.core.mixing import assemble_vertical_diffusion
 from orbit.core.convdiff import assemble_horizontal_convdiff
 from orbit.core.convection import assemble_cmfmc_transport
+from orbit.core.grid_data import density_weights
 from orbit.core.deposition import (
     assemble_deposition, N_SPECIES,
     IDX_SO2, IDX_NOX, IDX_PSO4, IDX_TOTAL_NO3, IDX_O3, IDX_CO,
@@ -323,10 +324,28 @@ def assemble_transport_block(
     T_conv = assemble_cmfmc_transport(grid, indexer)
     T = T_hcd + T_vert + T_conv
 
+    # The four blocks conserve the pressure measure dP*area and leave a
+    # uniform mixing ratio alone. The state the rest of the model reads is a
+    # concentration at local density, c = rho x with rho = dP/(g Dz), so the
+    # block that acts on c is diag(rho) T diag(1/rho): it conserves the
+    # volume measure and leaves c = rho * const alone. Until 2026-09-26 the
+    # untransformed block acted on c directly, which read the transported
+    # variable as a mixing ratio in transport and as a concentration
+    # everywhere else, a source-to-receptor density ratio in every result
+    # (under 1% on the plains, about 20% on the Tibetan plateau).
+    if getattr(grid, "concentration_state", True):
+        T = to_concentration_form(T, grid)
+
     if not return_boundary_fluxes:
         return T
     lateral_loss = compute_lateral_boundary_loss(grid, indexer)
     return T, lateral_loss
+
+
+def to_concentration_form(T: sp.csc_matrix, grid: GridData) -> sp.csc_matrix:
+    """diag(rho) T diag(1/rho) with rho = dP/(g Dz): the block on concentrations."""
+    rho = density_weights(grid)
+    return (sp.diags(rho) @ T @ sp.diags(1.0 / rho)).tocsc()
 
 
 def assemble_single_species_L(T: sp.csc_matrix, D: sp.csc_matrix) -> sp.csc_matrix:
@@ -565,7 +584,12 @@ def mass_balance_diagnostics(grids, indexer: CellIndexer, blocks=("transport",))
     rows_interior, rows_top, per_layer = [], [], []
     for g in grids:
         T = assemble_transport_block(g, indexer)
-        r = np.asarray(T.sum(axis=1)).ravel().reshape(nz, ny, nx) * DAY
+        # The state a mass-consistent operator leaves alone is a uniform
+        # mixing ratio: x = 1 in the pressure form, c = rho in the
+        # concentration form. (T w) / w is the row sum of the pressure form
+        # either way.
+        w = density_weights(g) if getattr(g, "concentration_state", True) else np.ones(indexer.N)
+        r = (np.asarray(T @ w).ravel() / w).reshape(nz, ny, nx) * DAY
         r = np.where(inner, r, np.nan)
         rows_interior.append(r[:-1].ravel())
         rows_top.append(r[-1].ravel())

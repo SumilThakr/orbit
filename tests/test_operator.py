@@ -60,11 +60,19 @@ class TestTransportBlock:
         g.CMFMC = CMFMC
         idx = CellIndexer(g.nz, g.ny, g.nx)
 
-        T = assemble_transport_block(g, idx, scheme="exp")
-
-        # Single conserved weight: W = dP·area, area = dx·dy (dy constant → omit).
+        # In the pressure form (state proportional to a mixing ratio) the
+        # conserved weight is W = dP·area; in the concentration form the
+        # production block uses (2026-09-26) it is the cell volume
+        # W = Dz·area. area = dx·dy (dy constant → omit).
         dx_3d = np.broadcast_to(g.dx[None, :, None], (nz, ny, nx))
+        g.concentration_state = False
+        T = assemble_transport_block(g, idx, scheme="exp")
         W = (dx_3d * g.dP).ravel()
+        WT_p = (W @ T.toarray()).reshape(nz, ny, nx)
+        assert np.allclose(WT_p[:, 1:ny - 1, 1:nx - 1], 0.0, atol=1e-9)
+        g.concentration_state = True
+        T = assemble_transport_block(g, idx, scheme="exp")
+        W = (dx_3d * g.Dz).ravel()
         WT = (W @ T.toarray()).reshape(nz, ny, nx)
 
         # Every layer of a laterally interior column: the ground and the

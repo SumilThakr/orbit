@@ -634,6 +634,9 @@ def _record_configuration(args, months):
 
     R = _RECORD
     R.set_config("months", months, True, source="--month" if args.month else "default")
+    R.set_config("state variable",
+                 "concentration at local density; transport block transformed by "
+                 "rho = dP/(g Dz) (volume measure)", True, "fixed")
     R.set_config("horizontal transport",
                  "FCT (van Leer-MUSCL + Zalesak)" if args.horizontal_fct
                  else "first-order Patankar exponential",
@@ -1846,9 +1849,13 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
             chemistry_iters = 0
         if chemistry_iters > 0:
             try:
+                from orbit.core.grid_data import density_weights
+                _P = grids[0].Pressure
+                _sigma = np.array([float(_P[k].mean() / _P[0].mean()) for k in range(nz)])
                 hemco_clim = load_hemco_climatology(
                     2016, month, grids[0].lat, grids[0].lon,
                     hemco_dir=hemco_dir or "/path/to/data/GCClassic_Output/14.0.0",
+                    rho_profile=(_sigma, density_weights(grids[0]).reshape(nz, ny, nx)),
                 )
                 print(f"  HEMCO climatology: 2016-{month:02d} loaded")
             except Exception as e:

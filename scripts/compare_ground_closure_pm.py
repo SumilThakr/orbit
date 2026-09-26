@@ -5,14 +5,16 @@ Solves the periodic orbit for primary PM2.5 (transport plus deposition, no
 chemistry, bin-flat emissions from the active manifest) for one month under
 up to four transport operators, and compares the bin-mean surface field:
 
-  closed      the released operator (ground closed, 2026-09-25 fix)
+  closed      the production operator: interface omega_edge where the grids
+              carry it, ground closed, state a concentration at local density
   leak        the operator before the fix: the layer-0 mid-level omega_plus is
               reinstated as a downward loss through the ground, exactly as
               assemble_vertical_advection applied it
-  density     closed, then similarity-transformed by the air density,
-              T' = diag(rho) T diag(1/rho), so that the transported variable
-              is a concentration at local density rather than proportional to
-              a mixing ratio; not in production
+  mixing      closed without the density transform: the transported variable
+              proportional to a mixing ratio, the reading before 2026-09-26
+  cellcentred closed with the cell-centred omega read at the bottom faces and
+              the top closed, the vertical flux before 2026-09-26 (only on
+              grids that carry omega_edge)
   diagnosed   closed, with the bin-mean omega replaced by the value diagnosed
               from the horizontal face-flux divergence (rows of the advective
               blocks then sum to zero); unsplit, so compare it with 'unsplit',
@@ -71,7 +73,7 @@ def _stats(r):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--month", type=int, default=1)
-    ap.add_argument("--variants", nargs="+", default=["closed", "leak"],
+    ap.add_argument("--variants", nargs="+", default=["closed", "leak", "mixing", "cellcentred"],
                     choices=["closed", "leak", "density", "unsplit", "diagnosed"])
     ap.add_argument("--out", default=None, help="save the bin-mean 3-D fields per variant to this NPZ")
     ap.add_argument("--emissions-manifest", default=None,
@@ -118,16 +120,31 @@ def main():
             leak = np.zeros((nz, ny, nx))
             leak[0] = np.where(g.dP[0] > 0, g.omega_plus[0] / np.where(g.dP[0] > 0, g.dP[0], 1.0), 0.0)
             ops["leak"] = T_closed + sp.diags(leak.ravel())
-        if "density" in lus:
-            ops["density"] = (sp.diags(rho) @ T_closed @ sp.diags(1.0 / rho)).tocsc()
+        if "mixing" in lus:
+            # The pre-2026-09-26 reading: the untransformed block acting on
+            # concentrations (state proportional to a mixing ratio).
+            g.concentration_state = False
+            ops["mixing"] = assemble_transport_block(g, idx)
+            g.concentration_state = True
+        if "cellcentred" in lus and g.has_interface_omega:
+            # The pre-2026-09-26 vertical flux: the cell-centred omega read
+            # at the bottom faces, ground and top closed.
+            keep = (g.omega_edge, g.omega_edge_plus, g.omega_edge_minus)
+            g.omega_edge = g.omega_edge_plus = g.omega_edge_minus = np.array([])
+            ops["cellcentred"] = assemble_transport_block(g, idx)
+            g.omega_edge, g.omega_edge_plus, g.omega_edge_minus = keep
         if "unsplit" in lus or "diagnosed" in lus:
             om_plus, om_minus = g.omega_plus.copy(), g.omega_minus.copy()
+            edge = (g.omega_edge, g.omega_edge_plus, g.omega_edge_minus)
+            g.omega_edge = g.omega_edge_plus = g.omega_edge_minus = np.array([])
             if "unsplit" in lus:
                 g.omega_plus = np.maximum(g.omega, 0.0)
                 g.omega_minus = np.maximum(-g.omega, 0.0)
                 ops["unsplit"] = assemble_transport_block(g, idx)
             if "diagnosed" in lus:
+                g.concentration_state = False
                 div = np.asarray(assemble_horizontal_convdiff(g, idx).sum(axis=1)).ravel().reshape(nz, ny, nx) * g.dP
+                g.concentration_state = True
                 om_d = np.zeros_like(g.omega)
                 for k in range(nz - 1):
                     om_d[k + 1] = om_d[k] + div[k]
@@ -135,6 +152,7 @@ def main():
                 g.omega_minus = np.maximum(-om_d, 0.0)
                 ops["diagnosed"] = assemble_transport_block(g, idx)
             g.omega_plus, g.omega_minus = om_plus, om_minus
+            g.omega_edge, g.omega_edge_plus, g.omega_edge_minus = edge
         for name, T in ops.items():
             lus[name].append(_LU(I_N + (T + D) * DTAU))
     print(f"factorised {len(args.variants) * N_BINS} matrices in {time.time() - t0:.0f} s")
@@ -153,7 +171,8 @@ def main():
     plains = (Ps > 95000) & land
     inner = np.zeros((ny, nx), bool)
     inner[1:-1, 1:-1] = True
-    pairs = [(a, b) for a, b in [("closed", "leak"), ("density", "closed"), ("diagnosed", "unsplit"), ("unsplit", "closed")]
+    pairs = [(a, b) for a, b in [("closed", "leak"), ("closed", "mixing"), ("closed", "cellcentred"),
+                                 ("diagnosed", "unsplit"), ("unsplit", "closed")]
              if a in fields and b in fields]
     for a, b in pairs:
         A, B = fields[a][0], fields[b][0]

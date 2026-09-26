@@ -58,6 +58,15 @@ class GridData:
     omega_edge_minus: np.ndarray = field(default_factory=lambda: np.array([]))  # (nz+1, ny, nx) >= 0
     has_interface_omega: bool = False
     rho_air: np.ndarray = field(default_factory=lambda: np.array([]))  # (nz, ny, nx) kg/m3, dP/(g Dz)
+    # The state variable is a concentration at local density (ug/m3), the
+    # quantity emissions, outputs, deposition and chemistry already use. The
+    # transport block is assembled in the pressure measure, where a uniform
+    # mixing ratio is the equilibrium, and then transformed by
+    # diag(rho) T diag(1/rho) with rho = dP/(g Dz) (operator.
+    # assemble_transport_block). False reproduces the pre-2026-09-26 reading,
+    # in which the transported variable was proportional to a mixing ratio
+    # while everything else read it as a concentration.
+    concentration_state: bool = True
     has_split_omega: bool = False
 
     # Split-flux wind averages (from preprocessor, or computed from UAvg/VAvg)
@@ -461,6 +470,19 @@ def _compute_geometry(g: GridData) -> None:
     for k in range(g.nz):
         for j in range(g.ny):
             g.volume[k, j, :] = g.dx[j] * g.dy * g.Dz[k, j, :]
+
+
+def density_weights(g: GridData) -> np.ndarray:
+    """rho = dP / (g Dz) per cell, flat (N,), 1 where a cell is degenerate.
+
+    This is the density the pressure measure implies, and the similarity
+    weight that turns the mixing-ratio form of the transport block into the
+    concentration form. It is recomputed from dP and Dz rather than read
+    from rho_air so that the conserved measure is exactly the cell volume.
+    """
+    ok = (g.dP > 0) & (g.Dz > 0)
+    rho = np.where(ok, g.dP / (GRAVITY * np.where(ok, g.Dz, 1.0)), 1.0)
+    return rho.ravel()
 
 
 def _compute_terrain_ratios(g: GridData) -> None:

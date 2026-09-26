@@ -425,24 +425,41 @@ def _zalesak_2d(grid, c, faces, dt):
     return Cx, Cy
 
 
+def _state_weights(grid, N):
+    """rho for a grid in concentration form (the transported variable is
+    c/rho), ones for the pressure form."""
+    if getattr(grid, "concentration_state", True):
+        from orbit.core.grid_data import density_weights
+        return density_weights(grid)
+    return np.ones(N)
+
+
 def compute_horizontal_fct_source(grid, indexer, c_flat, dt, limited=True):
     """Deferred-correction FCT source d_AD = -div(C⊙A) for one species.
 
     c_flat : (N,) concentration in indexer order.
     dt     : the step used for the Zalesak bound (the orbit DTAU).
-    Returns d_AD as a flat (N,) tendency (units of -L c). Gated entirely by the
-    caller; production never calls this. With limited=False, returns the
+    Returns d_AD as a flat (N,) tendency (units of -L c). Flux correction is
+    the production default for forward and zero-out runs (cli.py); marginal
+    runs default to the low-order operator. With limited=False, returns the
     unlimited anti-diffusive source (for diagnostics only — not monotone).
+
+    The face fluxes and the Zalesak bounds are formed on the transported
+    variable of the pressure measure, x = c / rho, and the tendency is
+    returned for c (multiplied by rho), matching the transformed transport
+    block (operator.assemble_transport_block).
     """
     nz, ny, nx = grid.nz, grid.ny, grid.nx
-    c = np.asarray(c_flat, dtype=np.float64).reshape(nz, ny, nx)
+    N = nz * ny * nx
+    rho = _state_weights(grid, N)
+    c = (np.asarray(c_flat, dtype=np.float64) / rho).reshape(nz, ny, nx)
     faces = _horizontal_antidiffusive(grid, c)
     if limited:
         Cx, Cy = _zalesak_2d(grid, c, faces, dt)
     else:
         Cx = Cy = None
     d = _net_antidiffusive_into_cells(grid, faces, Cx, Cy)
-    return d.reshape(-1)
+    return d.reshape(-1) * rho
 
 
 def assemble_fct_linear_operator(grid, indexer, c_baseline_flat, dt):
@@ -475,7 +492,10 @@ def assemble_fct_linear_operator(grid, indexer, c_baseline_flat, dt):
     """
     nz, ny, nx = grid.nz, grid.ny, grid.nx
     N = indexer.N
-    c = np.asarray(c_baseline_flat, dtype=np.float64).reshape(nz, ny, nx)
+    # Frozen at the baseline's transported variable x = c / rho; the operator
+    # is transformed back to concentrations at the end.
+    rho = _state_weights(grid, N)
+    c = (np.asarray(c_baseline_flat, dtype=np.float64) / rho).reshape(nz, ny, nx)
     n3d = np.arange(N, dtype=np.int64).reshape(nz, ny, nx)
     faces = _horizontal_antidiffusive(grid, c)
     Cx, Cy = _zalesak_2d(grid, c, faces, dt)
@@ -513,7 +533,10 @@ def assemble_fct_linear_operator(grid, indexer, c_baseline_flat, dt):
 
     if not rows:
         return sp.csc_matrix((N, N))
-    return sp.csc_matrix(
+    L_AD = sp.csc_matrix(
         (np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
         shape=(N, N),
     )
+    if getattr(grid, "concentration_state", True):
+        L_AD = (sp.diags(rho) @ L_AD @ sp.diags(1.0 / rho)).tocsc()
+    return L_AD
