@@ -10,6 +10,7 @@ from orbit.io.reader import load_preprocessor, truncate_u, truncate_v, load_frla
 
 # Earth radius (WGS84 semi-major axis)
 EARTH_RADIUS = 6378137.0
+GRAVITY = 9.80665  # m/s^2
 DEG_TO_RAD = np.pi / 180.0
 
 
@@ -47,6 +48,16 @@ class GridData:
     omega: np.ndarray = field(default_factory=lambda: np.array([]))  # (nz, ny, nx) Pa/s
     omega_plus: np.ndarray = field(default_factory=lambda: np.array([]))   # (nz, ny, nx) max(omega,0) avg
     omega_minus: np.ndarray = field(default_factory=lambda: np.array([]))  # (nz, ny, nx) max(-omega,0) avg
+    # Interface mass flux (2026-09-26 grids): omega_edge[k] is the downward
+    # flux through the bottom face of layer k, omega_edge[0] = 0 (closed
+    # ground), omega_edge[nz] the flux through the domain top. Diagnosed in
+    # the preprocessor from the face winds; empty on older grids, where
+    # advection.interface_omega derives it from the cell-centred fields.
+    omega_edge: np.ndarray = field(default_factory=lambda: np.array([]))        # (nz+1, ny, nx) Pa/s
+    omega_edge_plus: np.ndarray = field(default_factory=lambda: np.array([]))   # (nz+1, ny, nx) >= 0
+    omega_edge_minus: np.ndarray = field(default_factory=lambda: np.array([]))  # (nz+1, ny, nx) >= 0
+    has_interface_omega: bool = False
+    rho_air: np.ndarray = field(default_factory=lambda: np.array([]))  # (nz, ny, nx) kg/m3, dP/(g Dz)
     has_split_omega: bool = False
 
     # Split-flux wind averages (from preprocessor, or computed from UAvg/VAvg)
@@ -189,6 +200,7 @@ class GridData:
 _GRID_INPUT_VARS = frozenset([
     "lon", "lat", "Ap", "Bp", "Psurf", "Dz", "LayerHeights", "CMFMC",
     "omega", "omega_plus", "omega_minus",
+    "omega_edge", "omega_edge_plus", "omega_edge_minus", "rho_air",
     "UAvg", "VAvg", "UAvg_plus", "UAvg_minus", "VAvg_plus", "VAvg_minus",
     "K_meander_u", "K_meander_v",
     "Kzz", "Kxxyy",
@@ -292,6 +304,29 @@ def load_grid(preprocessor_path: str, constants_path: Optional[str] = None,
         g.omega_plus = np.maximum(g.omega, 0.0)
         g.omega_minus = np.maximum(-g.omega, 0.0)
         g.has_split_omega = False
+
+    # Interface mass flux from the face winds (grids made on or after
+    # 2026-09-26). Older grids lack it; the vertical block then falls back to
+    # the cell-centred convention above (see advection.interface_omega).
+    if "omega_edge" in raw:
+        g.omega_edge = np.asarray(raw["omega_edge"], dtype=np.float64)
+        if g.omega_edge.shape[0] != g.nz + 1:
+            raise ValueError(
+                f"omega_edge has {g.omega_edge.shape[0]} levels; expected nz+1 = {g.nz + 1}")
+        if "omega_edge_plus" in raw:
+            g.omega_edge_plus = np.asarray(raw["omega_edge_plus"], dtype=np.float64)
+            g.omega_edge_minus = np.asarray(raw["omega_edge_minus"], dtype=np.float64)
+        else:
+            g.omega_edge_plus = np.maximum(g.omega_edge, 0.0)
+            g.omega_edge_minus = np.maximum(-g.omega_edge, 0.0)
+        g.has_interface_omega = True
+
+    # Air density the pressure measure implies. The preprocessor writes the
+    # snapshot mean of dP/(g Dz); older grids get the bin-mean quotient.
+    if "rho_air" in raw:
+        g.rho_air = np.asarray(raw["rho_air"], dtype=np.float64)
+    else:
+        g.rho_air = g.dP / (GRAVITY * np.where(g.Dz > 0, g.Dz, 1.0))
 
     # Meander diffusivities (also staggered)
     g.K_meander_u = truncate_u(np.asarray(raw["K_meander_u"], dtype=np.float64), g.nx)

@@ -446,8 +446,8 @@ def assemble_vertical_convdiff(
     Kzz = grid.Kzz
     Dz = grid.Dz
     dP = grid.dP
-    omega_plus = grid.omega_plus     # (nz, ny, nx) downward >= 0
-    omega_minus = grid.omega_minus   # (nz, ny, nx) upward >= 0
+    from orbit.core.advection import interface_omega
+    omega_plus, omega_minus = interface_omega(grid)   # (nz+1, ny, nx) at the interfaces
 
     n3d = np.arange(N, dtype=np.int64).reshape(nz, ny, nx)
 

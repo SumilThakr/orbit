@@ -380,21 +380,54 @@ def assemble_horizontal_advection(
     return sp.csc_matrix((all_vals, (all_rows, all_cols)), shape=(N, N))
 
 
+def interface_omega(grid: GridData):
+    """The upwind-split mass flux through every layer interface.
+
+    Returns ``(w_plus, w_minus)``, each (nz+1, ny, nx) and non-negative:
+    ``w_plus[k]`` is the downward and ``w_minus[k]`` the upward flux through
+    the bottom face of layer k (Pa/s). Index 0 is the ground and is zero,
+    index nz is the domain top.
+
+    Grids made on or after 2026-09-26 carry this directly (``omega_edge``,
+    diagnosed in the preprocessor from the face winds with a closed ground).
+    Older grids carry the cell-centred, mass-averaged omega; for them the
+    bottom face of layer k takes the cell-k value, as the solver always read
+    it, the ground is closed and the top is closed, which reproduces the
+    pre-2026-09-26 operator exactly.
+    """
+    nz, ny, nx = grid.nz, grid.ny, grid.nx
+    if grid.omega_edge_plus.size > 0 and grid.omega_edge_plus.shape[0] == nz + 1:
+        w_plus = np.asarray(grid.omega_edge_plus, dtype=np.float64).copy()
+        w_minus = np.asarray(grid.omega_edge_minus, dtype=np.float64).copy()
+    else:
+        w_plus = np.zeros((nz + 1, ny, nx), dtype=np.float64)
+        w_minus = np.zeros((nz + 1, ny, nx), dtype=np.float64)
+        if grid.omega_plus.size > 0:
+            w_plus[1:nz] = grid.omega_plus[1:]
+            w_minus[1:nz] = grid.omega_minus[1:]
+    # The ground is closed whatever the file says.
+    w_plus[0] = 0.0
+    w_minus[0] = 0.0
+    return w_plus, w_minus
+
+
 def assemble_vertical_advection(grid: GridData, indexer: CellIndexer) -> sp.csc_matrix:
     """Assemble vertical advection operator (sigma-native, first-order only).
 
-    Uses omega (Pa/s) with dP as the vertical "thickness".
-    omega > 0: downward (subsidence), omega < 0: upward (convection).
+    Uses the interface mass flux omega (Pa/s) with dP as the vertical
+    "thickness". omega > 0: downward (subsidence), omega < 0: upward.
 
-    Interface convention:
-    - omega[k] is at the bottom face of layer k (= top face of layer k-1)
-    - omega[0] would be the ground surface. It is ignored, because the
-      ground is closed (no air crosses it). The preprocessor stores
-      cell-centred omega, so omega[0] holds the layer-0 mid-level value,
-      not a ground flux; until 2026-09-25 it was applied as a downward loss
-      with no receiving cell and removed surface-layer tracer into the
-      ground at about three times the dry-deposition rate.
-    - Top of domain (above layer nz-1) = zero flux (not stored)
+    Interface convention (see ``interface_omega``):
+    - w[k] is the flux through the bottom face of layer k (= top face of
+      layer k-1); w[k+1] through its top face.
+    - w[0] is the ground, closed: no air crosses it. Until 2026-09-25 the
+      layer-0 mid-level value of the cell-centred omega was applied there as
+      a downward loss with no receiving cell and removed surface-layer
+      tracer into the ground at about three times the dry-deposition rate.
+    - w[nz] is the domain top. Upward flux there is outflow; downward flux
+      brings in tracer-free air, which dilutes the top layer through the
+      outflows that balance it elsewhere, so it adds no term of its own.
+      (Grids without an interface omega have a closed top.)
 
     Parameters
     ----------
@@ -407,9 +440,10 @@ def assemble_vertical_advection(grid: GridData, indexer: CellIndexer) -> sp.csc_
     """
     nz, ny, nx = grid.nz, grid.ny, grid.nx
     N = indexer.N
-    omega_plus = grid.omega_plus    # (nz, ny, nx) downward component >= 0
-    omega_minus = grid.omega_minus  # (nz, ny, nx) upward component >= 0
-    dP = grid.dP                    # (nz, ny, nx)
+    w_plus, w_minus = interface_omega(grid)   # (nz+1, ny, nx)
+    omega_plus = w_plus[:nz]     # bottom faces of layers 0..nz-1, downward >= 0
+    omega_minus = w_minus[:nz]   # bottom faces, upward >= 0
+    dP = grid.dP                 # (nz, ny, nx)
 
     n3d = np.arange(N, dtype=np.int64).reshape(nz, ny, nx)
 
@@ -447,17 +481,16 @@ def assemble_vertical_advection(grid: GridData, indexer: CellIndexer) -> sp.csc_
         cols_list.append(n_below[idx_bot_up])
         vals_list.append(-w_bot_up[idx_bot_up] / safe_dP[idx_bot_up])  # negative = gain
 
-    # Top face (interface k+1): omega_plus[k+1] downward, omega_minus[k+1] upward
-    w_top_down = np.zeros((nz, ny, nx), dtype=np.float64)
-    w_top_down[:-1, :, :] = omega_plus[1:, :, :]  # k+1 for layers 0..nz-2
-    w_top_up = np.zeros((nz, ny, nx), dtype=np.float64)
-    w_top_up[:-1, :, :] = omega_minus[1:, :, :]
-    # For k = nz-1: zero flux at top of domain
+    # Top face (interface k+1): w_plus[k+1] downward, w_minus[k+1] upward,
+    # for every layer including the top one, whose top face is the domain top.
+    w_top_down = w_plus[1:]    # (nz, ny, nx)
+    w_top_up = w_minus[1:]
 
     has_above = np.zeros((nz, ny, nx), dtype=bool)
     has_above[:-1, :, :] = True
 
-    # Downward at top face: gain at k from k+1
+    # Downward at top face: gain at k from k+1. At the domain top the air
+    # coming in is tracer-free, so there is nothing to gain.
     top_down = valid & has_above & (w_top_down > 0)
     n_above = np.zeros_like(n3d)
     n_above[:-1, :, :] = n3d[1:, :, :]
@@ -468,8 +501,9 @@ def assemble_vertical_advection(grid: GridData, indexer: CellIndexer) -> sp.csc_
         cols_list.append(n_above[idx_top_down])
         vals_list.append(-w_top_down[idx_top_down] / safe_dP[idx_top_down])  # negative = gain
 
-    # Upward at top face: loss from k through top face
-    top_up = valid & has_above & (w_top_up > 0)
+    # Upward at top face: loss from k through its top face, outflow at the
+    # domain top included.
+    top_up = valid & (w_top_up > 0)
     diag += np.where(top_up, w_top_up / safe_dP, 0.0)
 
     # Filter: only add diagonal where diag > 0
@@ -635,8 +669,7 @@ def _assemble_horizontal_advection_loop(
 def _assemble_vertical_advection_loop(grid: GridData, indexer: CellIndexer) -> sp.csc_matrix:
     nz, ny, nx = grid.nz, grid.ny, grid.nx
     N = indexer.N
-    omega_plus = grid.omega_plus    # downward component >= 0
-    omega_minus = grid.omega_minus  # upward component >= 0
+    omega_plus, omega_minus = interface_omega(grid)   # (nz+1, ny, nx), interfaces
     dP = grid.dP
 
     rows, cols, vals = [], [], []
@@ -660,15 +693,15 @@ def _assemble_vertical_advection_loop(grid: GridData, indexer: CellIndexer) -> s
                     n_below = indexer.to_flat(k - 1, j, i)
                     rows.append(n); cols.append(n_below); vals.append(-w_up / dp)
 
-                # Top face: downward = gain from above, upward = loss
-                if k < nz - 1:
-                    w_above_down = omega_plus[k + 1, j, i]
-                    w_above_up = omega_minus[k + 1, j, i]
-                    if w_above_down > 0:
-                        n_above = indexer.to_flat(k + 1, j, i)
-                        rows.append(n); cols.append(n_above); vals.append(-w_above_down / dp)
-                    if w_above_up > 0:
-                        diag += w_above_up / dp
+                # Top face: downward = gain from above (none at the domain
+                # top, where the incoming air is tracer-free), upward = loss.
+                w_above_down = omega_plus[k + 1, j, i]
+                w_above_up = omega_minus[k + 1, j, i]
+                if w_above_down > 0 and k < nz - 1:
+                    n_above = indexer.to_flat(k + 1, j, i)
+                    rows.append(n); cols.append(n_above); vals.append(-w_above_down / dp)
+                if w_above_up > 0:
+                    diag += w_above_up / dp
 
                 if diag > 0:
                     rows.append(n); cols.append(n); vals.append(diag)
