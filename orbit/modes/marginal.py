@@ -316,9 +316,9 @@ def run_marginal_month(
     # (A_PHOTO > 0); otherwise neither the file nor the TUV LUT is required.
     _photo_lut = load_photolysis_lut() if get_a_photo() > 0 else None
     try:
-        _photo_year = int(os.environ.get("ORBIT_PREPROC_YEAR_TAG", "2016"))
+        _photo_year = int(os.environ.get("ORBIT_PREPROC_YEAR_TAG", "2022"))
     except ValueError:
-        _photo_year = 2016
+        _photo_year = 2022
     if _photo_lut is not None:
         for tau in range(N_BINS):
             attach_jno2_to_grid(grids[tau], _photo_lut, _photo_year, month, tau)

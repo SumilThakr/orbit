@@ -1,7 +1,12 @@
-"""Full coupled operator assembly.
+"""Operator assembly.
 
-Assembles the 6N x 6N block-structured operator L from transport, deposition,
-and chemistry components.
+Assembles the shared N x N transport block, one N x N operator per
+transported species (transport plus that species' deposition and diagonal
+chemistry loss), and the off-diagonal N x N coupling blocks between species
+(SO2 to pSO4, NOx to TotalNO3, the VBS aging cascade, the ISORROPIA
+cross-partials). There is no single stacked matrix: the periodic-orbit
+solver factors the per-species operators and applies the couplings through
+the right-hand sides.
 """
 
 import os
@@ -375,7 +380,7 @@ def assemble_species_operators(
 ) -> tuple:
     """Assemble N_SPECIES independent single-species operators + chemistry couplings.
 
-    9-species inventory (see deposition.py for indices):
+    14-species inventory (see deposition.py for indices; the first nine are):
         0 SoA, 1 PrimaryPM25, 2 TotalNH, 3 SO2, 4 NOx,
         5 pSO4, 6 TotalNO3, 7 O3, 8 CO.
 
@@ -623,7 +628,7 @@ def operator_diagnostics(L: sp.csc_matrix, indexer: CellIndexer) -> dict:
     Parameters
     ----------
     L : csc_matrix
-        Operator matrix (N x N for single species, 6N x 6N for coupled)
+        Operator matrix (N x N; a per-species operator or the transport block)
     indexer : CellIndexer
 
     Returns

@@ -1,8 +1,7 @@
 """Plume rise calculations for elevated emission sources.
 
-Implements the ASME (1973) plume rise algorithm, implemented here
-. Computes buoyancy/momentum rise
-from stack parameters and local meteorology.
+Implements the ASME (1973) plume rise algorithm: buoyancy and momentum
+rise from stack parameters and local meteorology.
 
 Falls back to simple cumulative Dz lookup when met fields are unavailable
 or stack parameters are not provided.

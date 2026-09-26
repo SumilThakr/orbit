@@ -5,7 +5,7 @@ For each month:
   2. Assemble 8 sets of species operators
   3. UMFPACK symbolic factorization (shared across all 48 matrices)
   4. Load monthly emissions
-  5. Solve periodic orbit for all 6 species via GMRES
+  5. Solve periodic orbit for all 14 species via GMRES
   6. Extract PM2.5 per bin, compute orbit mean
   7. Save orbit NPZ
 
@@ -85,8 +85,8 @@ from orbit.core.deposition_maps import (
 
 # ── Cluster paths ──────────────────────────────────────────────────────────
 # PREPROC_DIR + filename year-tag are env-var configurable so the same
-# script drives 2016, 2016-with-CMFMC, 2022-met, etc. without code edits.
-# Defaults preserve the historical behaviour (2016 met, MONTHLY_SAS/2016 dir).
+# script drives other years or grid sets without code edits. The defaults
+# are the released 2022 South Asia grids (year tag 2022).
 PREPROC_DIR = os.environ.get(
     "ORBIT_PREPROC_DIR",
     "/path/to/data/inputs/grids_2022",
@@ -208,8 +208,8 @@ def _preproc_path(month, bin_idx):
     """Path to monthly bin preprocessor file. month: 1-12, bin_idx: 1-8.
 
     The year tag in the filename comes from ORBIT_PREPROC_YEAR_TAG (default
-    '2016'), and the directory from ORBIT_PREPROC_DIR. Both default to the
-    historical 2016-met baseline location for backward compatibility.
+    '2022'), and the directory from ORBIT_PREPROC_DIR (a placeholder until
+    set; see the Quickstart in README.md).
     """
     return os.path.join(
         PREPROC_DIR,
@@ -1638,11 +1638,11 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
     # 3. Load emissions. Two-stage:
     #
     # Stage A: standard loader on non-VOC sources only. Returns a
-    # (N_BINS, 6*N) array under the legacy ORBIT 6-species layout. Slot 0
+    # (N_BINS, 7*N) array under the loader's 7-slot layout (SPECIES_MAP). Slot 0
     # is forced to zero by the loader (it would have received only
     # legacy "TotalOrg" mass, which has no place in the VBS scheme).
-    # Rebroadcast 6 → 13 slots placing the existing species at their
-    # DCOMP indices. New VBS slots (9-12) start at zero.
+    # Rebroadcast to the 14 transported species, placing the loaded slots
+    # at their indices. New VBS slots (9-12) start at zero.
     #
     # Stage B: per VOC source individually, distribute the source's VOC
     # mass across the 5 VBS bins (slot 0 = C*=100 + slots 9-12) per
@@ -1652,9 +1652,9 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
     #
     # The split keeps per-source identity for VOC files (needed to apply
     # the right yield set per-source), while reusing the existing
-    # 6-species accumulator path for everything else.
+    # slot-accumulator path for everything else.
     #
-    # 13-species DCOMP+VBS layout:
+    # 14-species layout (POA is 13):
     #   0   IDX_VBS_C100  (gets C*=100 yields from VOC sources)
     #   1   PM25
     #   2   TotalNH
@@ -1816,7 +1816,7 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
                     impact="the VBS receives no IVOC precursor, so IVOC "
                            "scaling has no effect on OA.",
                     fix="verify the species slot read by the IVOC stage "
-                        "against the ORBIT 6-species layout and the "
+                        "against the loader's 7-slot layout and the "
                         "ceds_pm25_anthro inputs.",
                 )
     timings["emissions"] = time.time() - t0
@@ -3702,12 +3702,11 @@ def main():
                              "--isorropia-closure-iters.")
     parser.add_argument("--isorropia-closure-iters", type=int, default=6,
                         help="Max ISORROPIA partitioning iterations (separate "
-                             "from --chemistry-iters). Loop is gated on "
-                             "p99(|ΔPM2.5|/max(PM2.5, 1 µg/m³)) < closure_tol — "
-                             "convergence on the model's actual output, not on "
-                             "intermediate partitioning fractions (a clean-marine "
-                             "f_NO3 swing in cells where pNO3 is 0.05 µg/m³ "
-                             "shouldn't gate the answer). 6 iters covers "
+                             "from --chemistry-iters). The loop stops when the "
+                             "90th percentile of the relative change in "
+                             "particulate nitrate and in particulate ammonium "
+                             "(each with a 0.5 µg/m³ floor) both fall below "
+                             "--closure-tol. 6 iters covers "
                              "Picard@α=0.5 with margin; Anderson typically halves "
                              "this. Set to 0 to disable the closure entirely "
                              "(no-ISORROPIA ablation baseline).")
@@ -3782,8 +3781,9 @@ def main():
                              "updates (0 < alpha <= 1; 1.0 = no damping). Default 0.5.")
     parser.add_argument("--closure-tol", type=float, default=DEFAULT_TOL,
                         help=f"Convergence tolerance (default {DEFAULT_TOL}). "
-                             f"Gates the ISORROPIA closure on "
-                             f"p99(|ΔPM2.5|/max(PM2.5, 1 µg/m³)); with "
+                             f"Gates the ISORROPIA closure on the 90th percentile "
+                             f"of the relative change in particulate NO3 and NH4 "
+                             f"(0.5 µg/m³ floor); with "
                              f"--chemistry-iters > 0 it also gates the "
                              f"chemistry loop on |ΔOH|, |ΔO3|, |Δf_NH4|, "
                              f"|Δf_NO3|.")

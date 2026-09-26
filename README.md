@@ -65,8 +65,9 @@ Total NO₃.
 
 For **secondary organic aerosol**, ORBIT uses a 1-D volatility basis set (Donahue et al., 2006): 5 bins at 
 C\* = {0.1, 1, 10, 100, 1000} µg m⁻³ with an OH-driven aging cascade.
-Oxidant fields (OH, H₂O₂, NO₂/NO₃/N₂O₅) are prescribed from a GEOS-Chem simulation (Thakrar et al., 2022) 
-and not currently fully-coupled. Gas/particle partitioning is given by the Pankow closure 
+Oxidant fields (OH, NO, NO₂, NO₃) are prescribed from a GEOS-Chem v11-01 nested-Asia simulation for 2016
+(Thakrar et al., 2022) and not currently fully coupled; H₂O₂ enters only through the preprocessor's
+SO₂ oxidation rate, and N₂O₅ is diagnosed from the NO₂ and NO₃ equilibrium. Gas/particle partitioning is given by the Pankow closure 
 against the total absorbing organic mass (including primary organic aerosol).
 
 ## Transport and deposition
@@ -75,11 +76,14 @@ against the total absorbing organic mass (including primary organic aerosol).
 scheme with a deferred, anti-diffusive correction (Zalesak FCT limiter) so 
 transport is second-order in smooth flow and monotone at fronts.
 
-- **Vertical advection** is given by MERRA-2 pressure velocity ω with a
-  coordinate correction `ω_cross = ω − v_H · ∇_η p` to distinguish between
-  upslope advection and ventilation.
+- **Vertical advection** uses the mass flux through each layer interface
+  diagnosed in the preprocessor from the divergence of the same horizontal
+  face fluxes the solver transports with, integrated up from a closed ground
+  with the surface-pressure tendency, so that a uniform mixing ratio is left
+  alone by transport. (MERRA-2's cell-centred ω is kept as a diagnostic.)
 - **Convection** is given by the MERRA-2 (non-local) convective updraft mass
-  flux.
+  flux with the compensating environmental subsidence in the same column, so
+  convection moves no net air.
 - **PBL mixing** follows the YSU K_zz profile with a free-tropospheric floor.
 - **Dry deposition** uses Wesely (1989) resistances for gases and
   Seinfeld–Pandis impaction/interception/diffusion for accumulation-mode
@@ -87,7 +91,15 @@ transport is second-order in smooth flow and monotone at fronts.
 - **Wet scavenging** uses intensity-dependent in-cloud nucleation and
   EMEP-derived sub-cloud washout.
 - Horizontal transport, vertical advection, vertical diffusion, and convection
-  are all reconciled to a single dP·area mass measure.
+  are all reconciled to a single mass measure, and the state variable is a
+  concentration at local density: the transport block is assembled in the
+  pressure measure and transformed by ρ = dP/(g·Dz), so emissions, outputs,
+  deposition and chemistry all read the same quantity.
+- Every forward run checks the air-mass balance of the assembled transport
+  block (the row sums over interior cells, per day) before solving, records it
+  in `run.json`, and stops if the 90th percentile exceeds
+  `--mass-balance-tol` (0.05 per day by default; `--allow-mass-imbalance`
+  overrides for a deliberate comparison).
 
 ## Simulation modes
 
@@ -156,7 +168,7 @@ The last command tells pip to install ORBIT from the current directory
 (`-e .`) together with the optional dependency groups named `fast` (the
 UMFPACK solver backend, already provided by the conda line above) and
 `dev` (the test tools). The core scientific dependencies — numpy, scipy,
-xarray, netCDF4, pyyaml, matplotlib, numba — are installed automatically.
+xarray, netCDF4, pyyaml, matplotlib — are installed automatically.
 
 **No conda?** From inside the cloned `orbit` folder, this works on any
 system:
@@ -181,7 +193,7 @@ pip install -e ".[fast,dev]"
 pytest -m "not slow"
 ```
 
-Expect roughly 480 tests passing. A handful of tests skip when
+Expect roughly 510 tests passing. A handful of tests skip when
 `scikit-umfpack` or `pymetis` are absent — everything still runs, just
 slower; ORBIT says so in a startup warning rather than failing.
 
@@ -189,7 +201,8 @@ The optional dependency groups, for reference: `fast` (scikit-umfpack —
 the UMFPACK LU backend), `metis` (pymetis — a nested-dissection ordering
 that is 1.3× faster at 25% less peak memory than the default COLAMD
 ordering, with results identical to floating-point noise), `geo`
-(geopandas + shapely, only needed for shapefile emissions), and `dev`
+(geopandas + shapely, for shapefile emissions and the subdistrict
+aggregation), `figures` (cartopy, for the map figures), and `dev`
 (pytest and the test dependencies). The conda command above already covers
 `fast` and `metis`.
 
@@ -655,12 +668,13 @@ Commonly adjusted flags:
 | `--closure-mode {full,chem-only}` | `full` | what the outer loop refreshes |
 | `--closure-alpha`, `--closure-tol` | 0.5, 0.02 | closure damping and convergence gate (2% on particulate NO3/NH4) |
 | `--chemistry-iters N` | 0 | diagnostic-OH path (> 0 not currently in production) |
-| `--top-bc-days`, `--lateral-bc-days` | 10, 1 | boundary-condition relaxation timescales (days) |
+| `--mass-balance-tol`, `--allow-mass-imbalance` | 0.05, off | air-mass balance pre-flight on the transport block (p90 of interior row sums, per day) and its override |
+| `--top-bc-days`, `--lateral-bc-days` | 10, 1 | boundary-condition relaxation timescales (days) for O₃ only, active only with `--chemistry-iters` > 0 (off in production) |
 
 ## Tests
 
 ```bash
-pytest -m "not slow"   # ~480 tests; a few skips are normal
+pytest -m "not slow"   # ~510 tests; a few skips are normal
 pytest                 # also runs tests that read the full input data
 ```
 

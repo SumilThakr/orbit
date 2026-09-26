@@ -7,7 +7,8 @@ For the steady-state matrix:
 For merged species (Total NH, Total NO3), effective deposition rates use
 partition-weighted combination of gas and particle rates.
 
-9-species inventory (DCOMP + CO):
+14-species inventory (indices below; POA at 13 and the four further VBS
+bins at 9 to 12 are listed after the constants):
 
   0  SoA           pure-particle SOA tracer (yield-at-emission scheme; was
                    previously a lumped TotalOrg with p_org partitioning).

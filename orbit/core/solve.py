@@ -12,9 +12,6 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
-# Species names for progress reporting
-_SPECIES_NAMES = ["Org", "PM2.5", "NH", "SO2", "pSO4", "NO"]
-
 # --- METIS nested-dissection ordering ---
 # METIS produces far better fill-reducing orderings than COLAMD for 3D PDE
 # operators with dense vertical couplings (ACM2 mixing).  On SAS (227K cells):

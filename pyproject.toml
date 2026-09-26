@@ -8,7 +8,7 @@ version = "1.0.0"
 description = "ORBIT: sparse steady-state atmospheric transport + source-receptor model"
 license = { text = "MIT" }
 requires-python = ">=3.9"
-dependencies = ["numpy", "scipy", "xarray", "netCDF4", "pyyaml", "matplotlib", "numba"]
+dependencies = ["numpy", "scipy", "xarray", "netCDF4", "pyyaml", "matplotlib"]
 
 [project.optional-dependencies]
 # Strongly recommended. The default LU backend is UMFPACK; without it ORBIT
@@ -23,6 +23,8 @@ metis = ["pymetis"]
 # rasterio is needed by the subdistrict aggregation (rasterio.features);
 # without it the gridded pipeline still runs, only the admin-2 rollup fails.
 geo = ["geopandas>=0.12", "shapely>=2.0", "rasterio"]
+# Map figures (scripts/make_damage_maps.py and the evaluation figures).
+figures = ["cartopy"]
 dev = ["pytest", "pytest-cov", "geopandas>=0.12", "shapely>=2.0"]
 
 [project.scripts]

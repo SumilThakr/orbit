@@ -1,4 +1,7 @@
-"""Outer-iteration instrumentation for Phase 3d DCOMP closure.
+"""Outer-iteration instrumentation and the Anderson accelerator.
+
+Written for the DCOMP closure; the Anderson accelerator here now also
+serves the production ISORROPIA closure (--isorropia-anderson).
 
 The outer iteration closes OH <-> precursors <-> O3 <-> ISORROPIA
 partitioning <-> S_a simultaneously.  A bug that only manifests at

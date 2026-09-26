@@ -19,8 +19,9 @@ so the per-bin emission gradient (no chemistry coupling) is
             = DTAU · (λ_τ − R_τ)               ← cheap to read off.
 
 This file handles the SINGLE-SPECIES adjoint with no off-diagonal
-chemistry coupling (the K^T propagation is a follow-up; needed once
-NOx/SO2/VBS adjoint chains are wired into the driver). For each
+chemistry coupling; the K^T propagation across species (pSO4 to SO2,
+TotalNO3 to NOx, the VBS aging cascade) is done by orbit.modes.adjoint,
+which calls these routines per species in reverse DAG order. For each
 species' adjoint we reuse the same forward LU list `lu_list_8` and call
 `.solve(b, trans='T')` — no re-factorisation cost.
 """

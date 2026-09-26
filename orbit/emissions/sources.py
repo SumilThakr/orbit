@@ -1,7 +1,8 @@
 """Emission source configuration and constants.
 
-Emission source configuration, adapted for ORBIT's
-6-species merged convention.
+Emission source configuration for the loader's 7-slot emission layout
+(SPECIES_MAP below); the solver's 14 transported species are filled from
+these slots and the VOC-to-VBS distribution.
 """
 
 from dataclasses import dataclass
@@ -177,7 +178,7 @@ CONVERT_COLS = {'nh3', 'sox', 'so2', 'nox', 'no2'}
 
 
 # =============================================================================
-# legacy 9-species -> ORBIT 6-species mapping
+# emitted-species names -> loader slot
 # =============================================================================
 
 # the reference model idx -> ORBIT idx
