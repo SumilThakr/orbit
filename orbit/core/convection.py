@@ -25,10 +25,20 @@ GRAVITY = 9.80665  # m/s², standard gravity
 def assemble_cmfmc_transport(grid: GridData, indexer: CellIndexer) -> sp.csc_matrix:
     """Assemble convective mass-flux transport operator.
 
-    For each layer k, the top interface flux F = CMFMC[k+1] drives:
-      - Loss from k:   diag[k] += F / (ρ_k · Dz_k)       = F·g / dP_k
-      - Gain at k+1:   off_diag[k+1,k] -= F / (ρ_{k+1} · Dz_{k+1}) = F·g / dP_{k+1}
-    where ρ_k = dP_k / (g · Dz_k) is the layer-mean air density.
+    For each layer k, the top interface flux F = CMFMC[k+1] drives the
+    updraft and the environmental subsidence that balances it in the same
+    column:
+      - Updraft, loss from k:      diag[k]   += F·g / dP_k
+      - Updraft, gain at k+1:      off[k+1,k] -= F·g / dP_{k+1}
+      - Subsidence, loss from k+1: diag[k+1] += F·g / dP_{k+1}
+      - Subsidence, gain at k:     off[k,k+1] -= F·g / dP_k
+    where ρ_k = dP_k / (g · Dz_k) is the layer-mean air density and every
+    rate is a flux per unit pressure thickness. Until 2026-09-26 only the
+    updraft was applied: air went up and nothing came down, a spurious loss
+    of 0.2 to 0.45 per day in the entrainment layers (layers 4 to 6 on the
+    2022 grids). With the return branch every interior row sums to zero;
+    the grid-mean omega then carries the environment and the updraft
+    together and this block only redistributes within the column.
 
     The gain uses the RECEIVER density ρ_{k+1}, so loss and gain both reduce to a
     flux per unit pressure thickness (F·g/dP). This makes the operator conserve
@@ -37,7 +47,8 @@ def assemble_cmfmc_transport(grid: GridData, indexer: CellIndexer) -> sp.csc_mat
     weight W = dP·area. Using the source density ρ_k for the gain (the
     previous form) instead conserved Σ Dz_k·c_k, an
     O(density-gradient) inconsistency with the other blocks.
-    At the domain top (k = nz-1), loss only — no receiver above.
+    At the domain top (k = nz-1) the updraft detrains above the domain and
+    the subsiding air that replaces it is tracer-free: loss only.
 
     Parameters
     ----------
@@ -90,6 +101,8 @@ def assemble_cmfmc_transport(grid: GridData, indexer: CellIndexer) -> sp.csc_mat
 
         # Gain at layer k+1 (if not top layer). Divide by the RECEIVER density
         # ρ_{k+1} so the gain is F·g/dP_{k+1} — conserving the Σ dP·c measure.
+        # The same interface carries the compensating subsidence: the layer
+        # above loses F·g/dP_{k+1} and layer k gains F·g/dP_k from it.
         if k < nz - 1:
             safe_Dz_above = np.where(Dz[k + 1] > 0, Dz[k + 1], 1.0)
             valid_above = valid[k + 1]
@@ -104,7 +117,11 @@ def assemble_cmfmc_transport(grid: GridData, indexer: CellIndexer) -> sp.csc_mat
                 idx = np.where(gain_active)
                 rows_list.append(n3d[k + 1][idx])
                 cols_list.append(n3d[k][idx])
-                vals_list.append(-rate_receiver[idx])  # negative = gain
+                vals_list.append(-rate_receiver[idx])  # updraft: gain at k+1
+                diag[k + 1] += rate_receiver           # subsidence: loss from k+1
+                rows_list.append(n3d[k][idx])
+                cols_list.append(n3d[k + 1][idx])
+                vals_list.append(-rate_source[idx])    # subsidence: gain at k
 
     # Assemble diagonal
     diag_pos = diag > 0
@@ -164,7 +181,9 @@ def _assemble_cmfmc_transport_loop(
                 vals.append(loss_rate)
 
                 # Gain at k+1 (if not top layer). Receiver density ρ_{k+1} so the
-                # gain is F·g/dP_{k+1} (Σ dP·c measure).
+                # gain is F·g/dP_{k+1} (Σ dP·c measure). The compensating
+                # subsidence through the same interface takes F·g/dP_{k+1}
+                # out of k+1 and puts F·g/dP_k into k.
                 if k < nz - 1:
                     dz_above = Dz[k + 1, j, i]
                     dp_above = dP[k + 1, j, i]
@@ -172,9 +191,9 @@ def _assemble_cmfmc_transport_loop(
                         n_above = indexer.to_flat(k + 1, j, i)
                         rho_above = dp_above / (GRAVITY * dz_above)
                         gain_rate = F / (rho_above * dz_above)
-                        rows.append(n_above)
-                        cols.append(n)
-                        vals.append(-gain_rate)
+                        rows.append(n_above); cols.append(n); vals.append(-gain_rate)
+                        rows.append(n_above); cols.append(n_above); vals.append(gain_rate)
+                        rows.append(n); cols.append(n_above); vals.append(-loss_rate)
 
     if len(vals) == 0:
         return sp.csc_matrix((N, N))
