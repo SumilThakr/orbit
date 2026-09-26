@@ -1505,6 +1505,23 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
         grids.append(g)
     timings["grid_load"] = time.time() - t0
 
+    if fold_meander_in_K:
+        print("  has_split_fluxes overridden to False — K_meander folded into K_face")
+    if unified_vertical_patankar:
+        print("  unified_vertical_patankar ON — vertical omega+Kzz assembled as "
+              "one Patankar operator (PROTOTYPE)")
+
+    # Verify shape consistency
+    nz, ny, nx = grids[0].nz, grids[0].ny, grids[0].nx
+    for tau in range(1, N_BINS):
+        assert (grids[tau].nz, grids[tau].ny, grids[tau].nx) == (nz, ny, nx), \
+            f"Bin {tau} shape mismatch: {(grids[tau].nz, grids[tau].ny, grids[tau].nx)} != {(nz, ny, nx)}"
+
+    indexer = CellIndexer(nz, ny, nx)
+    N = indexer.N
+    print(f"  Grid: {nz}x{ny}x{nx} = {N:,} cells, "
+          f"8 bins loaded ({timings['grid_load']:.1f}s)")
+
     # Air-mass balance pre-flight (2026-09-26). Row sums of the transport
     # block on interior cells are the rate at which the operator creates or
     # destroys air; the 2022 ground leak sat here at about 1 per day.
@@ -1529,22 +1546,6 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
                          "for a deliberate comparison run")
         if not _ALLOW_MASS_IMBALANCE:
             raise SystemExit("  ABORT: " + msg + " Pass --allow-mass-imbalance to run anyway.")
-    if fold_meander_in_K:
-        print("  has_split_fluxes overridden to False — K_meander folded into K_face")
-    if unified_vertical_patankar:
-        print("  unified_vertical_patankar ON — vertical omega+Kzz assembled as "
-              "one Patankar operator (PROTOTYPE)")
-
-    # Verify shape consistency
-    nz, ny, nx = grids[0].nz, grids[0].ny, grids[0].nx
-    for tau in range(1, N_BINS):
-        assert (grids[tau].nz, grids[tau].ny, grids[tau].nx) == (nz, ny, nx), \
-            f"Bin {tau} shape mismatch: {(grids[tau].nz, grids[tau].ny, grids[tau].nx)} != {(nz, ny, nx)}"
-
-    indexer = CellIndexer(nz, ny, nx)
-    N = indexer.N
-    print(f"  Grid: {nz}x{ny}x{nx} = {N:,} cells, "
-          f"8 bins loaded ({timings['grid_load']:.1f}s)")
 
     # 2. Factorize a baseline operator for UMFPACK symbolic reuse.
     # (The symbolic is shared across all 64 species-bin pairs via common
