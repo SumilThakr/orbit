@@ -202,5 +202,7 @@ orbit --mode zero-out --month 1 \
 
 Months are independent, so the usual pattern is one job per month (can be
 parallelised), or a single process over all months by omitting `--month`. Measured per-month cost at the
-default settings: forward ~23 min and ~5.2 GB; marginal ~4 min and ~5.8 GB
-(with `--horizontal-fct`, the flux-corrected linearisation, ~37 min).
+default settings, measured on the 2022 production year: forward 21 to 26 min
+and 13 GB peak; a low-order marginal run 1 to 15 min and 6 GB depending on
+how many species the perturbation touches (with `--horizontal-fct`, the
+flux-corrected linearisation, 25 to 40 min).

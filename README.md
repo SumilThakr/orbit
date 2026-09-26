@@ -178,7 +178,7 @@ pip install -e ".[dev]"
 ```
 
 ORBIT then falls back from UMFPACK to SuperLU, which is slower and needs
-roughly 1.5–2× more memory (a forward month peaks around 5 GB with UMFPACK
+roughly 1.5–2× more memory (a forward month peaks around 13 GB with UMFPACK
 at the default settings). To get UMFPACK without conda, first install
 SuiteSparse from your system's package manager, then include `fast`:
 
@@ -277,7 +277,7 @@ needed:
 orbit --mode forward --month 1
 ```
 
-Measured at the default settings: **23 minutes and 5.2 GB peak RAM** for one
+Measured at the default settings on the 2022 production year: **21 to 26 minutes and 13 GB peak RAM** for one
 month. Then check your solve against the published one:
 
 ```bash
@@ -301,7 +301,7 @@ the full year on an ordinary machine, a fine overnight job.
 # All twelve months in one process (~4.5-5 h total)
 orbit
 
-# Or one month per job (each ~23 min, ~5 GB peak)
+# Or one month per job (each ~23 min, ~13 GB peak)
 orbit --month $M
 ```
 
