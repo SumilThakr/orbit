@@ -31,8 +31,14 @@ per-month NetCDFs this script writes.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
+
+# Import the package from the checkout this script lives in, not from
+# whichever copy the environment has installed (an editable install can
+# point at a different checkout).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 
 def _parse_months(spec: str) -> list[int]:
