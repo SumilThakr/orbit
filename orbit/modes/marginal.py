@@ -758,13 +758,7 @@ def run_marginal_month(
     # M_OA→F_p partitioning-feedback factor 1/D.
     baseline_vbs_c = None
     if "c_orbit" in baseline.files:
-        c_orbit_base = np.asarray(baseline["c_orbit"], dtype=np.float64)  # (N_SPECIES,9,N)
-        baseline_vbs_c = np.empty((N_BINS, len(IDX_VBS_BINS), nz, ny, nx),
-                                  dtype=np.float64)
-        for tau in range(N_BINS):
-            for k, s in enumerate(IDX_VBS_BINS):
-                baseline_vbs_c[tau, k] = np.maximum(
-                    c_orbit_base[s, tau + 1].reshape(nz, ny, nx), 0.0)
+        baseline_vbs_c = baseline_vbs_from_c_orbit(baseline["c_orbit"], nz, ny, nx)
     delta_pm25_orbit, delta_pm25_mean = _compute_delta_pm25(
         delta_c_orbit, grids, nz, ny, nx, N, baseline_vbs_c=baseline_vbs_c,
     )
@@ -821,6 +815,25 @@ def run_marginal_month(
     timings["delta_c_max_abs"] = float(np.abs(delta_c_orbit).max())
     timings["delta_pm25_max_abs"] = float(np.abs(delta_pm25_orbit).max())
     return timings
+
+
+def baseline_vbs_from_c_orbit(c_orbit, nz, ny, nx):
+    """Per-bin baseline VBS bin masses for the Pankow feedback factor 1/D.
+
+    ``c_orbit`` is the forward output's concentration along the periodic
+    orbit, shape (N_SPECIES, N_BINS + 1, N); entry ``tau + 1`` is the state at
+    the end of bin ``tau``, which is what the marginal solve pairs with the
+    bin-``tau`` operator. Returns (N_BINS, 5, nz, ny, nx) in ``IDX_VBS_BINS``
+    order, clipped at zero. Marginal mode (``_compute_delta_pm25``) and
+    adjoint mode (``growth_jacobian.apply_growth_transpose``) must build D
+    from the same field, or the adjoint-versus-marginal duality breaks.
+    """
+    c = np.asarray(c_orbit, dtype=np.float64)
+    out = np.empty((N_BINS, len(IDX_VBS_BINS), nz, ny, nx), dtype=np.float64)
+    for tau in range(N_BINS):
+        for k, s in enumerate(IDX_VBS_BINS):
+            out[tau, k] = np.maximum(c[s, tau + 1].reshape(nz, ny, nx), 0.0)
+    return out
 
 
 def _compute_delta_pm25(

@@ -33,6 +33,7 @@ import xarray as xr
 from orbit.core.deposition import N_SPECIES
 from orbit.core.grid_data import load_grid
 from orbit.core.growth_jacobian import apply_growth_transpose
+from orbit.modes.marginal import baseline_vbs_from_c_orbit
 from orbit.core.indexing import CellIndexer
 from orbit.core.operator import assemble_species_operators
 from orbit.core.orbit import DTAU, N_BINS, _SOLVE_ORDER, _factor_one_bin
@@ -350,6 +351,17 @@ def run_adjoint_month(
             p_no3_surface_per_bin = np.broadcast_to(
                 iso_no3_surf, (N_BINS, g0.ny, g0.nx)
             ).copy()
+        # Baseline per-bin VBS bin masses for the Pankow feedback factor 1/D
+        # on the POA and VBS receptors, built exactly as marginal mode builds
+        # them. Until 2026-09-26 this stayed None, so D was 1 everywhere: the
+        # POA receptor equalled the primary-PM2.5 receptor and the VBS bins
+        # carried F_p alone.
+        if "c_orbit" in orbit_npz.files:
+            baseline_vbs_c = baseline_vbs_from_c_orbit(
+                orbit_npz["c_orbit"], g0.nz, g0.ny, g0.nx)
+        elif verbose:
+            print("  WARNING: baseline NPZ has no c_orbit; the organic "
+                  "partitioning feedback (1/D) is off in the receptor.")
         # Per-bin VBS state for the growth Jacobian's F_p × 1/D term.
         # apply_growth_transpose looks at g.F_p_vbs / g.M_OA_3d; we
         # inject the marg fields directly into the grids list below.
