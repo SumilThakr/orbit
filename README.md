@@ -109,10 +109,13 @@ by an adjoint solve: `scripts/compute_marginal_deaths.py` computes
 ∂deaths/∂emissions for every grid cell in one solve per month, using a
 precomputed deaths-gradient field (population × baseline mortality rate ×
 the slope of a concentration–response function, evaluated at the baseline
-exposure). Gradient fields for three concentration–response functions —
-GEMM five-cause, GEMM all-cause, and the GBD Integrated Exposure–Response —
-are published in the companion health-impacts data deposit (link to be
-added).
+exposure). Gradient fields for three concentration–response functions (GEMM
+five-cause, GEMM all-cause, and the GBD Integrated Exposure–Response) are
+published in the companion health-impacts data deposit (link to be added).
+The finished results, marginal deaths per 1000 kg emitted for every
+subdistrict, pollutant, and concentration–response function, as NetCDF and
+CSV, are published in the companion results deposit (link to be added), so
+none of the following needs re-running to use them.
 
 ```bash
 python scripts/compute_marginal_deaths.py \
@@ -128,7 +131,7 @@ python scripts/compute_marginal_deaths.py \
 This writes `adjoint_M01.nc` holding ∂deaths/∂emissions per species, time
 bin, and grid cell. `scripts/postprocess_marginal_deaths_scenarios.py` turns
 a full 12-month sweep into policy-scenario damage estimates and can
-aggregate them to admin-2 subdistricts — that last step needs the `geo`
+aggregate them to admin-2 subdistricts. That last step needs the `geo`
 extra and the GADM 4.1 polygons (`gadm_410.gpkg`), which GADM's licence
 does not allow us to redistribute; download from
 [gadm.org](https://gadm.org).
