@@ -16,7 +16,8 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
 from orbit.core.deposition import (
-    N_SPECIES,
+    N_SPECIES, IDX_SOA, IDX_PM25, IDX_POA, IDX_TOTAL_NH, IDX_PSO4,
+    IDX_TOTAL_NO3, IDX_VBS_BINS,
 )
 from orbit.core.constants import N_TO_NH4, N_TO_NO3, S_TO_SO4
 
@@ -795,14 +796,20 @@ _SEASALT_TO_NA = 0.306
 def extract_pm25_isorropia(c_6N, grid, indexer, lut):
     """Extract PM2.5 using ISORROPIA LUT for inorganic partitioning.
 
-    Organic partitioning stays prescribed (from GEOS-Chem).  Inorganic
-    f_nh4/f_no3 come from the 7D ISORROPIA LUT queried at orbit
-    concentrations and bin-averaged meteorology.
+    The organic part is the same as in the reported ``pm25_mean``: primary
+    organic aerosol plus the F_p-weighted sum over the 5 VBS bins when the
+    grid carries ``F_p_vbs`` (the C100 bin alone otherwise). Inorganic
+    f_nh4/f_no3 come from the 7D ISORROPIA LUT re-queried at the orbit
+    concentrations and bin-averaged meteorology, so the field differs from
+    ``pm25_mean`` only through the inorganic partitioning. Until 2026-09-26
+    the organic part was the C100 bin alone with no POA, which made the
+    field a few µg/m³ low in organic-rich cells.
 
     Parameters
     ----------
-    c_6N : ndarray, shape (6*N,)
-        Coupled concentration vector (element mass, ug/m3).
+    c_6N : ndarray, shape (N_SPECIES*N,)
+        Coupled concentration vector (element mass, ug/m3), species-major
+        in the IDX_* order of deposition.py.
     grid : GridData
         Bin grid with RH, Temperature, dust_fine, sea_salt_fine.
     indexer : CellIndexer
@@ -819,13 +826,25 @@ def extract_pm25_isorropia(c_6N, grid, indexer, lut):
     N = indexer.N
     nz, ny, nx = grid.nz, grid.ny, grid.nx
 
-    # 8-species layout: indices match IDX_* in deposition.py.
-    # Org=0, PM25=1, NH=2, SO2=3, NOx=4, pSO4=5, TotalNO3=6, O3=7.
-    c_soa   = np.maximum(c_6N[0 * N:1 * N], 0.0)
-    c_pm    = np.maximum(c_6N[1 * N:2 * N], 0.0)
-    c_nh    = np.maximum(c_6N[2 * N:3 * N], 0.0)
-    c_pso4  = np.maximum(c_6N[5 * N:6 * N], 0.0)
-    c_no3   = np.maximum(c_6N[6 * N:7 * N], 0.0)   # TotalNO3 = HNO3 + pNO3
+    def _species(idx):
+        return np.maximum(c_6N[idx * N:(idx + 1) * N], 0.0)
+
+    n_species_present = c_6N.size // N
+    c_pm    = _species(IDX_PM25)
+    c_nh    = _species(IDX_TOTAL_NH)
+    c_pso4  = _species(IDX_PSO4)
+    c_no3   = _species(IDX_TOTAL_NO3)   # TotalNO3 = HNO3 + pNO3
+    # Organics as in cli._soa_3d_flat: F_p-weighted particle mass over the 5
+    # VBS bins when the grid carries F_p_vbs, else the C100 bin alone.
+    F_p = getattr(grid, "F_p_vbs", None)
+    if (F_p is not None and F_p.shape[0] == len(IDX_VBS_BINS)
+            and n_species_present > max(IDX_VBS_BINS)):
+        c_soa = np.zeros(N, dtype=np.float64)
+        for i, s in enumerate(IDX_VBS_BINS):
+            c_soa = c_soa + F_p[i].ravel() * _species(s)
+    else:
+        c_soa = _species(IDX_SOA)
+    c_poa = _species(IDX_POA) if n_species_present > IDX_POA else np.zeros(N)
 
     # ISORROPIA inputs: element mass, ug/m3.
     # total_SO4 = pSO4 only (SO2 not in equilibrium pool).
@@ -854,10 +873,9 @@ def extract_pm25_isorropia(c_6N, grid, indexer, lut):
         total_so4, total_nh, total_no3, Ca_flat, Na_flat, T_flat, RH_flat,
     )
 
-    # PM2.5 = primary + SOA + ISORROPIA NH4 + SO4 + ISORROPIA NO3.
-    # SoA is now a pure-particle tracer fed by yield-at-emission (Variant A);
-    # the legacy p_org × TotalOrg lumped extraction is gone.
+    # PM2.5 = primary + POA + SOA + ISORROPIA NH4 + SO4 + ISORROPIA NO3.
     pm25 = (c_pm
+            + c_poa
             + c_soa
             + f_nh4 * c_nh * N_TO_NH4
             + c_pso4 * S_TO_SO4

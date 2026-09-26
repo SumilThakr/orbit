@@ -112,7 +112,7 @@ release.
 | `c_orbit`                    | (14, 9, N)         | Concentration along the periodic orbit, element mass; axes are (N_SPECIES, N_BINS+1, N) |
 | `c_mean`                     | (14, N)            | UTC-mean concentration                                         |
 | `pm25_orbit`                 | (8, nz, ny, nx)    | PM25 with the prescribed partitioning (compound mass)                            |
-| `iso_pm25_orbit`             | (8, nz, ny, nx)    | ISORROPIA-closed PM25 (compound mass)                          |
+| `iso_pm25_orbit`             | (8, nz, ny, nx)    | PM25 with the inorganic partitioning re-queried from the ISORROPIA LUT at the orbit state (compound mass); same organic part as `pm25_orbit` |
 | `iso_pm25_mean`              | (nz, ny, nx)       | UTC-mean of the above                                          |
 | `f_nh4_marg_3d`              | (8, nz, ny, nx)    | ∂pNH4/∂c_TotalNH at baseline (linearised partitioning)         |
 | `f_no3_marg_3d`              | (8, nz, ny, nx)    | ∂pNO3/∂c_TotalNO at baseline                                   |
