@@ -149,6 +149,12 @@ def _check_input_paths(lut_path=None):
 _MANIFEST = None
 _MANIFEST_PATH_OVERRIDE = None
 _ALLOW_MISSING_EMISSIONS = False
+# Air-mass balance pre-flight: the transport block's interior row sums must
+# stay below this (per day, 90th percentile) or the run stops. 0.05 per day
+# is a tenth of the smallest deposition rate that matters and well above
+# the diurnal pressure tide the operator cannot close (about 0.01 per day).
+_MASS_BALANCE_TOL = 0.05
+_ALLOW_MASS_IMBALANCE = False
 _RECORD = RunRecord()          # populated in main(); logging + JSON sidecar
 _RSS = RssSampler()            # phase-attributed peak RSS (D3, 2026-08-01)
 _VERIFY_INPUTS = False
@@ -1495,6 +1501,31 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
             g.unified_vertical_patankar = True
         grids.append(g)
     timings["grid_load"] = time.time() - t0
+
+    # Air-mass balance pre-flight (2026-09-26). Row sums of the transport
+    # block on interior cells are the rate at which the operator creates or
+    # destroys air; the 2022 ground leak sat here at about 1 per day.
+    _RSS.set_phase("mass_balance")
+    from orbit.core.operator import mass_balance_diagnostics
+    t_mb = time.time()
+    mb = mass_balance_diagnostics(grids, indexer)
+    timings["mass_balance"] = mb
+    print(f"  Air-mass balance of the transport block (|row sum| per day, interior cells, all bins): "
+          f"median {mb['interior_median']:.4f}, p90 {mb['interior_p90']:.4f}, "
+          f"p99 {mb['interior_p99']:.4f}, max {mb['interior_max']:.3f}; "
+          f"top layer median {mb['top_median']:.4f}  [{time.time() - t_mb:.1f}s]")
+    print("    per-layer p90: " + " ".join(f"{v:.3f}" for v in mb["layer_p90"]))
+    if mb["interior_p90"] > _MASS_BALANCE_TOL:
+        msg = (f"transport block interior row sums p90 = {mb['interior_p90']:.4f} per day "
+               f"exceed the air-mass balance tolerance {_MASS_BALANCE_TOL} per day: "
+               f"the operator creates or destroys air (grids without the interface "
+               f"mass flux omega_edge do this at 0.3 to 1 per day).")
+        _RECORD.warn("air-mass balance", msg,
+                     impact="every tracer has a spurious source or sink of this size",
+                     fix="regenerate the grids with omega_edge, or pass --allow-mass-imbalance "
+                         "for a deliberate comparison run")
+        if not _ALLOW_MASS_IMBALANCE:
+            raise SystemExit("  ABORT: " + msg + " Pass --allow-mass-imbalance to run anyway.")
     if fold_meander_in_K:
         print("  has_split_fluxes overridden to False — K_meander folded into K_face")
     if unified_vertical_patankar:
@@ -3932,6 +3963,15 @@ def main():
                              "are absent. Off by default: running with part "
                              "of the inventory silently missing gives a "
                              "wrong answer.")
+    parser.add_argument("--allow-mass-imbalance", action="store_true",
+                        help="Run even when the transport block's interior row "
+                             "sums exceed --mass-balance-tol. Off by default: "
+                             "an operator that creates or destroys air gives "
+                             "every tracer a spurious source or sink.")
+    parser.add_argument("--mass-balance-tol", type=float, default=0.05,
+                        help="Air-mass balance pre-flight: largest tolerated 90th "
+                             "percentile of |row sum| of the transport block "
+                             "over interior cells, per day (default 0.05).")
     parser.add_argument("--list-sources", action="store_true",
                         help="Print the manifest's emission sources and "
                              "their basenames, then exit. Useful for finding "
@@ -3953,7 +3993,10 @@ def main():
     # Resolve the emission manifest before anything reads the inventory.
     global _MANIFEST_PATH_OVERRIDE, _ALLOW_MISSING_EMISSIONS
     global _VERIFY_INPUTS, _EMISSION_BUDGET
+    global _MASS_BALANCE_TOL, _ALLOW_MASS_IMBALANCE
     _RECORD.command = list(sys.argv)
+    _MASS_BALANCE_TOL = args.mass_balance_tol
+    _ALLOW_MASS_IMBALANCE = args.allow_mass_imbalance
     _VERIFY_INPUTS = args.verify_inputs
     _EMISSION_BUDGET = not args.no_emission_budget
     _MANIFEST_PATH_OVERRIDE = args.emissions_manifest
@@ -4053,7 +4096,7 @@ def main():
                      "grid_load", "emissions", "save", "lu_fill_est")
                     if k in r and r[k] is not None
                 }
-                for k in ("gmres_iters_final", "gmres_resid_final"):
+                for k in ("gmres_iters_final", "gmres_resid_final", "mass_balance"):
                     if k in r:
                         _month_res[k] = r[k]
                 _RECORD.results[f"M{m:02d}"] = _month_res

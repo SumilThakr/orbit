@@ -88,7 +88,11 @@ def main():
         W = (area * g.dP).ravel()
         WT_v = (W @ blocks["vertical advection"]).reshape(nz, ny, nx)
         acc.setdefault("ground flux", []).append(WT_v[0] / area[0])          # Pa/s leaving through the ground
-        acc.setdefault("leak if open", []).append(g.omega_plus[0] / g.dP[0] * DAY)
+        if g.omega_plus.size > 0:
+            acc.setdefault("leak if open", []).append(g.omega_plus[0] / g.dP[0] * DAY)
+        if g.has_interface_omega:
+            acc.setdefault("top flux", []).append(g.omega_edge[-1])
+            acc.setdefault("top dilution", []).append(np.maximum(g.omega_edge[-1], 0) / g.dP[-1] * DAY)
         acc.setdefault("dry", []).append(g.particle_dry_dep[0] / g.Dz[0] * DAY)
         acc.setdefault("wet0", []).append(g.particle_wet_dep[0] * DAY)
         acc.setdefault("rho", []).append(g.dP / (GRAVITY * np.where(g.Dz > 0, g.Dz, 1.0)))
@@ -98,6 +102,9 @@ def main():
     inner = (slice(None), slice(1, -1), slice(1, -1))
 
     print(f"{len(paths)} bins, month {args.month}, grid {nz} x {ny} x {nx}")
+    print("   vertical flux: " + ("interface omega_edge diagnosed from the face winds (grids of 2026-09-26 or later)"
+                                  if g.has_interface_omega else
+                                  "cell-centred omega read at the bottom faces (grids before 2026-09-26)"))
     print("\n1. Row sums per day over laterally interior cells, all bins pooled.")
     print("   Positive = net air divergence (spurious sink of a uniform mixing ratio).")
     for name in ["horizontal", "vertical advection", "vertical diffusion", "convection", "total"]:
@@ -114,13 +121,21 @@ def main():
     gf = np.stack(acc["ground flux"])
     print(f"   max |W^T T_vadv| at the surface / area = {np.abs(gf).max():.3e} Pa/s "
           "(zero when the ground is closed)")
-    leak = np.stack(acc["leak if open"])[:, 1:-1, 1:-1]
     dry = np.stack(acc["dry"])[:, 1:-1, 1:-1]
     wet0 = np.stack(acc["wet0"])[:, 1:-1, 1:-1]
     print("   Surface-layer loss rates per day for a uniform field (interior cells):")
     print(f"   {'':>28} {'median':>8} {'p90':>8} {'max':>8} {'domain':>8}")
-    for name, v in [("omega_plus[0]/dP[0] (if open)", leak), ("dry deposition", dry), ("wet deposition, layer 0", wet0)]:
+    rows = [("dry deposition", dry), ("wet deposition, layer 0", wet0)]
+    if "leak if open" in acc:
+        rows.insert(0, ("omega_plus[0]/dP[0] (if open)", np.stack(acc["leak if open"])[:, 1:-1, 1:-1]))
+    for name, v in rows:
         print(f"   {name:>28} {np.median(v):8.3f} {np.percentile(v, 90):8.3f} {v.max():8.3f} {v.mean():8.3f}")
+    if "top flux" in acc:
+        tf = np.stack(acc["top flux"])[:, 1:-1, 1:-1]
+        td = np.stack(acc["top dilution"])[:, 1:-1, 1:-1]
+        print(f"   Domain-top flux omega_edge[nz] (Pa/s, + down): median {np.median(tf):.3e} "
+              f"p10 {np.percentile(tf, 10):.3e} p90 {np.percentile(tf, 90):.3e}; "
+              f"dilution of the top layer by tracer-free inflow, per day: median {np.median(td):.4f} p90 {np.percentile(td, 90):.4f}")
 
     print("\n3. Implied air density rho = dP/(g Dz), bin mean.")
     rho = np.stack(acc["rho"]).mean(axis=0)

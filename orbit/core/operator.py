@@ -541,6 +541,58 @@ def assemble_species_operators(
     return L_species, K_sources, T, d_species
 
 
+def mass_balance_diagnostics(grids, indexer: CellIndexer, blocks=("transport",)) -> dict:
+    """Row sums of the transport block over laterally interior cells, per day.
+
+    For a uniform mixing ratio the transport block changes cell i at the
+    rate -rowsum_i, so a non-zero interior row sum is air appearing or
+    vanishing: a spurious source or sink of every tracer. This is the check
+    that would have caught the vertical-advection ground leak of 2022
+    (surface rows summing to about 1 per day). Lateral boundary cells are
+    excluded (zero inflow, free outflow by design); the top layer is
+    reported separately, since a downward flux through the domain top
+    brings in tracer-free air and reads as a sink there.
+
+    Returns a dict with, over all bins pooled, the median, 90th and 99th
+    percentile and maximum of |row sum| per day for the interior layers,
+    the same for the top layer, the per-layer 90th percentile, and the
+    fraction of interior cells above 0.01 and 0.1 per day.
+    """
+    DAY = 86400.0
+    nz, ny, nx = grids[0].nz, grids[0].ny, grids[0].nx
+    inner = np.zeros((nz, ny, nx), dtype=bool)
+    inner[:, 1:-1, 1:-1] = True
+    rows_interior, rows_top, per_layer = [], [], []
+    for g in grids:
+        T = assemble_transport_block(g, indexer)
+        r = np.asarray(T.sum(axis=1)).ravel().reshape(nz, ny, nx) * DAY
+        r = np.where(inner, r, np.nan)
+        rows_interior.append(r[:-1].ravel())
+        rows_top.append(r[-1].ravel())
+        per_layer.append(r)
+    ri = np.abs(np.concatenate(rows_interior)); ri = ri[np.isfinite(ri)]
+    rt = np.abs(np.concatenate(rows_top)); rt = rt[np.isfinite(rt)]
+    pl = np.abs(np.stack(per_layer))                      # (bins, nz, ny, nx)
+    layer_p90 = [float(np.nanpercentile(pl[:, k], 90)) for k in range(nz)]
+    layer_mean = []
+    for k in range(nz):
+        v = np.stack(per_layer)[:, k]
+        layer_mean.append(float(np.nanmean(v)))
+    return {
+        "units": "per day, |row sum| of the transport block, laterally interior cells, all bins",
+        "interior_median": float(np.median(ri)),
+        "interior_p90": float(np.percentile(ri, 90)),
+        "interior_p99": float(np.percentile(ri, 99)),
+        "interior_max": float(ri.max()),
+        "interior_frac_above_0.01": float(np.mean(ri > 0.01)),
+        "interior_frac_above_0.1": float(np.mean(ri > 0.1)),
+        "top_median": float(np.median(rt)),
+        "top_p90": float(np.percentile(rt, 90)),
+        "layer_p90": layer_p90,
+        "layer_mean_signed": layer_mean,
+    }
+
+
 def operator_diagnostics(L: sp.csc_matrix, indexer: CellIndexer) -> dict:
     """Compute diagnostics for the operator matrix.
 
