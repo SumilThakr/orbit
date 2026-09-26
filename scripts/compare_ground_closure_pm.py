@@ -74,7 +74,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--month", type=int, default=1)
     ap.add_argument("--variants", nargs="+", default=["closed", "leak", "mixing", "cellcentred"],
-                    choices=["closed", "leak", "density", "unsplit", "diagnosed"])
+                    choices=["closed", "leak", "mixing", "cellcentred", "unsplit", "diagnosed"])
     ap.add_argument("--out", default=None, help="save the bin-mean 3-D fields per variant to this NPZ")
     ap.add_argument("--emissions-manifest", default=None,
                     help="emission manifest YAML; default is the shipped POA-split manifest, whose "
