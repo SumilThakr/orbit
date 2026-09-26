@@ -74,18 +74,21 @@ def _delta_k_nh(grid: GridData) -> np.ndarray:
 
 
 def _delta_k_no3(grid: GridData) -> np.ndarray:
-    """Δk for TotalNO3 = (particle-rate − HNO3-rate). 3D.
+    """Δk for TotalNO3 = (particle-rate − HNO3-rate). 3D, shape (nz, ny, nx).
 
-    Wet:  particle_wet_dep − HNO3_wet_dep_proxy. The current ORBIT
-    deposition code uses particle_wet_dep for both branches of TotalNO3
-    (see deposition.py: ``(1-p)·particle_wet_dep + p·particle_wet_dep``);
-    the gas-vs-particle wet distinction is documented as second-order.
-    So Δk_wet_NO3 ≈ 0 by design.
+    Wet:  particle_wet_dep − other_gas_wet_dep. The deposition operator
+          scavenges the HNO3 branch of TotalNO3 at the soluble-gas rate and
+          the particle branch at the particle rate (deposition.py,
+          ``(1-p)·other_gas_wet_dep + p·particle_wet_dep``, since
+          2026-08-02), so the contrast is the same as for TotalNH. Until
+          2026-09-26 this term was zero, left over from the earlier
+          all-particle placeholder.
     Dry:  (particle_dry_dep − HNO3_dry_dep) / Dz at k=0 only.
+
+    Returns a 3D array combining both contributions.
     """
     nz, ny, nx = grid.nz, grid.ny, grid.nx
-    # Wet: zero with the current proxy (both branches use particle_wet_dep).
-    dk_wet = np.zeros((nz, ny, nx), dtype=np.float64)
+    dk_wet = grid.particle_wet_dep - grid.other_gas_wet_dep  # (nz, ny, nx)
     vd_hno3 = _get_hno3_vd(grid)
     dk_dry_surf = grid.particle_dry_dep[0] - vd_hno3[0]
     dz_surf = grid.Dz[0]
