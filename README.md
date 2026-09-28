@@ -14,8 +14,8 @@ bins, and 5 inorganic species (NH, SO₂, pSO₄, NOₓ, NO₃). ORBIT uses mete
 data from MERRA-2 reanalyses to estimate how and where pollution moves, reacts,
 and gets removed from the atmosphere.
 
-Unlike other air quality models, ORBIT does not use time-stepping to estimate the
-trajectories of pollutant concentrations. Instead, for each month, ORBIT solves
+ORBIT avoids having to simulate pollutant trajectories across thousands of small
+time steps. Instead, for each month, ORBIT solves
 for the periodic steady state concentrations of PM2.5, using a diurnal periodic
 orbit (hence the name 'ORBIT'). Essentially, this is asking *if the average day
 of this calendar month repeated forever, what state would the atmosphere settle
@@ -66,8 +66,8 @@ Total NO₃.
 For **secondary organic aerosol**, ORBIT uses a 1-D volatility basis set (Donahue et al., 2006): 5 bins at 
 C\* = {0.1, 1, 10, 100, 1000} µg m⁻³ with an OH-driven aging cascade.
 Oxidant fields (OH, NO, NO₂, NO₃) are prescribed from a GEOS-Chem v11-01 nested-Asia simulation for 2016
-(Thakrar et al., 2022) and not currently fully coupled; H₂O₂ enters only through the preprocessor's
-SO₂ oxidation rate, and N₂O₅ is diagnosed from the NO₂ and NO₃ equilibrium. Gas/particle partitioning is given by the Pankow closure 
+(Thakrar et al., 2022) and not currently fully coupled. H₂O₂ enters only through the preprocessor
+SO₂ oxidation rate. N₂O₅ is diagnosed from the NO₂ and NO₃ equilibrium. Gas/particle partitioning is given by the Pankow closure 
 against the total absorbing organic mass (including primary organic aerosol).
 
 ## Transport and deposition
@@ -76,14 +76,14 @@ against the total absorbing organic mass (including primary organic aerosol).
 scheme with a deferred, anti-diffusive correction (Zalesak FCT limiter) so 
 transport is second-order in smooth flow and monotone at fronts.
 
-- **Vertical advection** uses the mass flux through each layer interface
-  diagnosed in the preprocessor from the divergence of the same horizontal
-  face fluxes the solver transports with, integrated up from a closed ground
-  with the surface-pressure tendency, so that a uniform mixing ratio is left
-  alone by transport. (MERRA-2's cell-centred ω is kept as a diagnostic.)
+- **Vertical advection** uses a vertical mass flux that is consistent with
+  the horizontal winds. For each 3-hourly MERRA-2 field, the divergence of
+  the horizontal winds gives the net rate at which air leaves each cell.
+  Integrating this upward from the ground gives the vertical flux through
+  each layer interface.
 - **Convection** is given by the MERRA-2 (non-local) convective updraft mass
-  flux with the compensating environmental subsidence in the same column, so
-  convection moves no net air.
+  flux, balanced by compensating subsidence of the surrounding air in the
+  same column, so that convection moves no net air.
 - **PBL mixing** follows the YSU K_zz profile with a free-tropospheric floor.
 - **Dry deposition** uses Wesely (1989) resistances for gases and
   Seinfeld–Pandis impaction/interception/diffusion for accumulation-mode
@@ -92,13 +92,13 @@ transport is second-order in smooth flow and monotone at fronts.
   EMEP-derived sub-cloud washout.
 - Horizontal transport, vertical advection, vertical diffusion, and convection
   are all reconciled to a single mass measure, and the state variable is a
-  concentration at local density: the transport block is assembled in the
+  concentration at local density. The transport block is assembled in the
   pressure measure and transformed by ρ = dP/(g·Dz), so emissions, outputs,
   deposition and chemistry all read the same quantity.
 - Every forward run checks the air-mass balance of the assembled transport
-  block (the row sums over interior cells, per day) before solving, records it
+  block (the row sums over interior cells per day) before solving, records it
   in `run.json`, and stops if the 90th percentile exceeds
-  `--mass-balance-tol` (0.05 per day by default; `--allow-mass-imbalance`
+  `--mass-balance-tol` (0.05 per day by default) (`--allow-mass-imbalance`
   overrides for a deliberate comparison).
 
 ## Simulation modes
@@ -669,7 +669,6 @@ Commonly adjusted flags:
 | `--closure-alpha`, `--closure-tol` | 0.5, 0.02 | closure damping and convergence gate (2% on particulate NO3/NH4) |
 | `--chemistry-iters N` | 0 | diagnostic-OH path (> 0 not currently in production) |
 | `--mass-balance-tol`, `--allow-mass-imbalance` | 0.05, off | air-mass balance pre-flight on the transport block (p90 of interior row sums, per day) and its override |
-| `--top-bc-days`, `--lateral-bc-days` | 10, 1 | boundary-condition relaxation timescales (days) for O₃ only, active only with `--chemistry-iters` > 0 (off in production) |
 
 ## Tests
 
