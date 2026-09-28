@@ -372,6 +372,10 @@ class RssSampler:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        # ORBIT_RSS_TRACE=<path> appends "seconds phase rss_mb" at every
+        # sample: a memory timeline to read against the solve log.
+        self._trace = os.environ.get("ORBIT_RSS_TRACE") or None
+        self._t0 = time.time()
 
     def _sample(self):
         if not self.enabled:
@@ -382,6 +386,13 @@ class RssSampler:
         with self._lock:
             if rss > self._peaks.get(self._phase, 0.0):
                 self._peaks[self._phase] = rss
+            phase = self._phase
+        if self._trace:
+            try:
+                with open(self._trace, "a") as f:
+                    f.write(f"{time.time() - self._t0:.1f} {phase} {rss:.0f}\n")
+            except OSError:
+                self._trace = None
 
     def set_phase(self, name: str):
         if not self.enabled:

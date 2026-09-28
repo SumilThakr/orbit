@@ -79,6 +79,9 @@ class TestIsorropiaLUTSynthetic:
 
     def test_load(self, synthetic_lut):
         """LUT loads without error and has expected interpolators (all 4 requested)."""
+        assert not synthetic_lut.loaded          # read on first query, not construction
+        synthetic_lut._ensure_loaded()
+        assert synthetic_lut.loaded
         assert len(synthetic_lut._interp) == 4
         assert set(synthetic_lut._interp.keys()) == {"f_nh4", "f_no3", "aerosol_water", "ph"}
 
@@ -86,10 +89,38 @@ class TestIsorropiaLUTSynthetic:
         """Default load is the two production fields only; aw/ph come back NaN."""
         path = _make_synthetic_lut(tmp_path)
         lut = IsorropiaLUT(path)  # default fields
+        lut._ensure_loaded()
         assert set(lut._interp.keys()) == {"f_nh4", "f_no3"}
         f_nh4, f_no3, aw, ph = lut.query(1.0, 1.0, 1.0, 0.0, 0.0, 275.0, 0.5)
         assert np.all(np.isfinite(f_nh4)) and np.all(np.isfinite(f_no3))
         assert np.all(np.isnan(aw)) and np.all(np.isnan(ph))
+
+    def test_release_and_reload(self, synthetic_lut):
+        """release() drops the table; the next query reloads it and answers the same."""
+        args = (1.0, 1.0, 1.0, 0.0, 0.0, 275.0, 0.5)
+        first = synthetic_lut.query(*args)
+        assert synthetic_lut.loaded and synthetic_lut.n_loads == 1
+        synthetic_lut.release()
+        assert not synthetic_lut.loaded
+        second = synthetic_lut.query(*args)
+        assert synthetic_lut.n_loads == 2
+        for a, b in zip(first, second):
+            np.testing.assert_array_equal(a, b)
+
+    def test_disk_cache_matches_archive(self, tmp_path, monkeypatch):
+        """The decompressed cache is written on the first load and read on the
+        next; both give identical answers."""
+        path = _make_synthetic_lut(tmp_path)
+        cache_root = tmp_path / "lut_cache"
+        monkeypatch.setenv("ORBIT_LUT_CACHE_DIR", str(cache_root))
+        args = (0.7, 1.3, 0.9, 0.0, 0.0, 280.0, 0.6)
+        lut = IsorropiaLUT(path)
+        from_archive = lut.query(*args)
+        assert (cache_root / lut._cache_dir.split("/")[-1] / "complete").exists()
+        lut2 = IsorropiaLUT(path)
+        from_cache = lut2.query(*args)
+        for a, b in zip(from_archive, from_cache):
+            np.testing.assert_array_equal(a, b)
 
     def test_scalar_query(self, synthetic_lut):
         """Query with scalar inputs returns length-1 arrays."""

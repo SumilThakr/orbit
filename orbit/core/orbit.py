@@ -8,6 +8,7 @@ formed explicitly.
 """
 
 import os
+import queue
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -364,10 +365,14 @@ def _solve_one_species(s, L_species_per_bin, K_sources_per_bin,
     # Exact per-species LU footprint (UMFPACK reports its own sizes;
     # SuperLU wrappers lack the attribute and report as 0 = unknown).
     lu_bytes = sum(getattr(lu, "numeric_bytes", 0.0) for lu in lu_list_8)
+    # UMFPACK's own peak workspace during the numeric phase, the largest of
+    # the 8 bins: the transient that the allocator's high-water mark keeps.
+    lu_peak_bytes = max((getattr(lu, "peak_bytes", 0.0) for lu in lu_list_8), default=0.0)
 
     if verbose:
         factor_note = " (cached)" if factor_skipped else ""
-        lu_note = f", lu={lu_bytes / 1e6:.0f}MB" if lu_bytes else ""
+        lu_note = (f", lu={lu_bytes / 1e6:.0f}MB, factor peak={lu_peak_bytes / 1e6:.0f}MB"
+                   if lu_bytes else "")
         log_lines.append(
             f"    Factor: {t_factor:.1f}s{factor_note}{lu_note}, "
             f"GMRES: {info['gmres_iters']} iter "
@@ -696,6 +701,10 @@ def solve_orbit_all_species(L_species_per_bin, K_sources_per_bin,
                             srcs = effective_srcs.get(tgt, [])
                             if all(src in completed for src in srcs):
                                 ready.append(tgt)
+                    # Drop the finished Futures now: each keeps its result
+                    # (8 factors) alive until it is collected, and `done` is
+                    # otherwise rebound only after the next wait.
+                    del done, fut
     else:
         # Legacy wave-barrier execution (preserved for A/B testing).
         for wave_idx, wave in enumerate(waves):
@@ -753,18 +762,32 @@ def solve_orbit_all_species(L_species_per_bin, K_sources_per_bin,
                 # inside the Future until the main thread reached it. Log
                 # blocks are still printed in submit order so run logs
                 # stay comparable across runs.
+                #
+                # Results travel through a queue rather than the Futures.
+                # A Future keeps its result until it is garbage-collected,
+                # and every Future of the wave lives until the pool exits,
+                # so returning the factors through them pinned ~1.6 GB per
+                # finished species until the wave's last species was done:
+                # the peak scaled with the wave size, not the thread count
+                # (January 2026-09-28 trace: 10.6 GB with 2 threads, where
+                # two species in flight need ~5 GB).
+                done_q = queue.Queue()
+
+                def _run_and_hand_off(idx, args):
+                    done_q.put((idx, _solve_one_species(**args)))
+
                 with ThreadPoolExecutor(
                     max_workers=min(n_species_threads, len(wave))
                 ) as pool:
-                    fut_idx = {pool.submit(_solve_one_species, **args): i
-                               for i, args in enumerate(task_args)}
+                    for i, args in enumerate(task_args):
+                        pool.submit(_run_and_hand_off, i, args)
                     pending_logs = {}
                     next_print = 0
-                    for fut in as_completed(fut_idx):
-                        idx = fut_idx[fut]
-                        s_res, orbit_res, info_res, lu_res, logs = fut.result()
+                    for _ in range(len(task_args)):
+                        idx, res = done_q.get()
+                        s_res, orbit_res, info_res, lu_res, logs = res
                         _merge_result(s_res, orbit_res, info_res, lu_res, None)
-                        del s_res, orbit_res, info_res, lu_res
+                        del res, s_res, orbit_res, info_res, lu_res
                         pending_logs[idx] = logs
                         while next_print in pending_logs:
                             logs_p = pending_logs.pop(next_print)

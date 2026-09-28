@@ -29,25 +29,89 @@ class IsorropiaLUT:
         correctly, and the upcast would double memory from 3.4 GB to
         6.9 GB — breaking 8 GB budgets on compute nodes.
         """
-        data = np.load(lut_path)
-        axes = (
-            data["so4_axis"],
-            data["nh_axis"],
-            data["no3_axis"],
-            data["ca_axis"],
-            data["na_axis"],
-            data["t_axis"],
-            data["rh_axis"],
-        )
+        self._path = str(lut_path)
+        self._fields = tuple(fields)
+        self._interp = None
+        self.axes = None
+        self.n_loads = 0
+        self.load_seconds = 0.0
+        # The table is read on the first query, not here: a forward run
+        # constructs it before the baseline solve, whose LU factors set the
+        # run's peak memory, and the first query comes after that solve.
+        self._cache_dir = self._cache_location()
+
+    _AXES = ("so4_axis", "nh_axis", "no3_axis", "ca_axis", "na_axis", "t_axis", "rh_axis")
+
+    def _cache_location(self):
+        """Directory holding the decompressed fields, or None.
+
+        Reloading the fields from the compressed archive costs about a
+        minute each time; from plain .npy files next to it (or under
+        ORBIT_LUT_CACHE_DIR) it costs seconds. The cache is written on the
+        first load and keyed by the archive's size and modification time.
+        """
+        import os
+        base = os.environ.get("ORBIT_LUT_CACHE_DIR") or (self._path + ".cache")
+        try:
+            st = os.stat(self._path)
+        except OSError:
+            return None
+        return os.path.join(base, f"{st.st_size}_{int(st.st_mtime)}")
+
+    def _load(self):
+        """Read the axes and the requested fields into memory."""
+        import os, time
+        t0 = time.time()
+        data = None
+        cached = (self._cache_dir is not None
+                  and os.path.exists(os.path.join(self._cache_dir, "complete"))
+                  and all(os.path.exists(os.path.join(self._cache_dir, f"{n}.npy"))
+                          for n in self._AXES + self._fields))
+        if cached:
+            arrays = {n: np.load(os.path.join(self._cache_dir, f"{n}.npy"))
+                      for n in self._AXES + self._fields}
+        else:
+            data = np.load(self._path)
+            arrays = {n: data[n] for n in self._AXES + self._fields}
+            if self._cache_dir is not None:
+                try:
+                    os.makedirs(self._cache_dir, exist_ok=True)
+                    for n, a in arrays.items():
+                        np.save(os.path.join(self._cache_dir, f"{n}.npy"), a)
+                    open(os.path.join(self._cache_dir, "complete"), "w").close()
+                except OSError:
+                    pass   # read-only location: reload from the archive next time
+        axes = tuple(arrays[n] for n in self._AXES)
         self._interp = {}
-        for name in fields:
+        for name in self._fields:
             self._interp[name] = RegularGridInterpolator(
                 axes,
-                data[name],  # keep as float32 — saves ~1.7 GB per field
+                arrays[name],  # keep as float32 — saves ~1.7 GB per field
                 bounds_error=False,
                 fill_value=None,  # linear extrapolation; outputs clamped in query()
             )
         self.axes = axes
+        self.n_loads += 1
+        self.load_seconds += time.time() - t0
+
+    @property
+    def loaded(self):
+        return self._interp is not None
+
+    def release(self):
+        """Drop the table from memory; the next query reloads it.
+
+        The closure queries the table once per outer iteration and the
+        forward solves in between hold the LU factors that set the run's
+        peak memory. Releasing the 1.8 GB of table after each query keeps
+        it out of that peak (memory audit of 2026-08-01, fix 2); a reload
+        from the compressed archive costs a few seconds.
+        """
+        self._interp = None
+
+    def _ensure_loaded(self):
+        if self._interp is None:
+            self._load()
 
     def query(self, total_so4, total_nh, total_no3, crustal_ca, sea_salt_na, T, RH):
         """Query the 7D LUT.
@@ -58,6 +122,7 @@ class IsorropiaLUT:
         Inputs can be scalars or arrays of the same shape.
         Returns (f_nh4, f_no3, aerosol_water, ph) as arrays.
         """
+        self._ensure_loaded()
         pts = np.column_stack([
             np.atleast_1d(total_so4).ravel(),
             np.atleast_1d(total_nh).ravel(),

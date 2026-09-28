@@ -2212,6 +2212,7 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
                 alpha=1.0 if isorropia_anderson else closure_alpha,
                 prev_per_bin=None if isorropia_anderson else prev_iso,
             )
+            closure_lut.release()   # keep the 1.8 GB table out of the next solve's peak
             if isorropia_anderson:
                 # State vector = surface f_NO3 across bins (the slowest-
                 # converging mode). Anderson combines history into a step
@@ -2571,6 +2572,7 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
                 grids, result["orbits"], closure_lut,
                 alpha=closure_alpha, prev_per_bin=prev_iso,
             )
+            closure_lut.release()
             partitioning_summary(prev_iso)
 
         print(f"  [iter {it}] Reassembling + solving with DCOMP rates")
