@@ -211,7 +211,7 @@ aggregation), `figures` (cartopy, for the map figures), and `dev`
 ORBIT reads pre-built meteorology/chemistry input grids plus an emissions
 directory. The South Asia 2022 inputs are archived separately:
 
-> **Data:** [Google Drive archive](https://drive.google.com/drive/folders/1o5a3RWS9suuazPKqmJuqg-1DrExCO6PE?usp=sharing) (a Zenodo DOI will follow)
+> **Data:** [Zenodo archive.](https://zenodo.org/records/23064136)
 
 The archive contains the input grids, the MERRA-2 constants file, the
 emissions directory, the ISORROPIA lookup table, and the twelve production
