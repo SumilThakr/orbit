@@ -284,7 +284,7 @@ def _solve_one_species(s, L_species_per_bin, K_sources_per_bin,
                 # For iso K-blocks (linearisation of an implicit
                 # operator coefficient), the c_baseline factor inside K
                 # is built at end-of-bin τ (orbits[idx][tau+1] in
-                # dcomp_isorropia._concentration_for_bin) and the
+                # isorropia_closure._concentration_for_bin) and the
                 # corresponding linearisation of zo's per-bin equation
                 # has δc_other at end-of-bin too — so the K · δc_other
                 # forcing must read src_orbit[tau+1] to keep the time-
@@ -810,7 +810,8 @@ def solve_orbit_all_species(L_species_per_bin, K_sources_per_bin,
 # ISORROPIA PM2.5 extraction
 # =============================================================================
 
-# Crustal Ca fraction of fine dust (Fountoukis & Nenes 2007)
+# Crustal Ca mass fraction of fine dust: an ORBIT assumption (not in
+# Fountoukis and Nenes 2007, which was cited for it through 1.0.2).
 _DUST_TO_CA = 0.036
 # Na fraction of fine sea salt (Seinfeld & Pandis Table 9.7)
 _SEASALT_TO_NA = 0.306

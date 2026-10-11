@@ -45,7 +45,8 @@ def _briggs_stable(F, u, s1):
 
 
 def _buoyancy_flux(diam, stack_temp, air_temp, vel):
-    temp_diff = 2 * (stack_temp - air_temp) / (stack_temp + air_temp)
+    # Briggs: F = g V (D/2)^2 (Ts - Ta) / Ts
+    temp_diff = (stack_temp - air_temp) / stack_temp
     return g * temp_diff * vel * (diam / 2) ** 2
 
 

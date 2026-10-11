@@ -45,7 +45,7 @@ class TestAgingKBlocks:
     def test_K_blocks_present(self, grid_with_OH, monkeypatch):
         """When archive_OH is populated, the operator has 4 aging K-blocks."""
         monkeypatch.setenv("ORBIT_VBS_K_AGE", "4.0e-11")
-        monkeypatch.setenv("ORBIT_VBS_FRAG", "0.75")
+        monkeypatch.setenv("ORBIT_VBS_AGING_GAIN", "1.075")
         from orbit.core.operator import assemble_species_operators
         from orbit.core.indexing import CellIndexer
         idx = CellIndexer(grid_with_OH.nz, grid_with_OH.ny, grid_with_OH.nx)
@@ -63,7 +63,7 @@ class TestAgingKBlocks:
         """K_age_src has negative diagonals; aging-loss adds positive
         rate to the source bin's loss diagonal."""
         monkeypatch.setenv("ORBIT_VBS_K_AGE", "4.0e-11")
-        monkeypatch.setenv("ORBIT_VBS_FRAG", "0.75")
+        monkeypatch.setenv("ORBIT_VBS_AGING_GAIN", "1.075")
         from orbit.core.operator import assemble_species_operators
         from orbit.core.indexing import CellIndexer
         idx = CellIndexer(grid_with_OH.nz, grid_with_OH.ny, grid_with_OH.nx)
@@ -97,8 +97,8 @@ class TestAgingKBlocks:
         for src, dst in VBS_AGING_PAIRS:
             assert (dst, src) not in K_sources
 
-    def test_alpha_frag_scales_destination(self, grid_with_OH, monkeypatch):
-        """α_frag = 0.5 should give half the destination rate vs α_frag = 1.0."""
+    def test_aging_gain_scales_destination(self, grid_with_OH, monkeypatch):
+        """AGING_GAIN = 0.5 gives half the destination rate of AGING_GAIN = 1.0."""
         from orbit.core.operator import assemble_species_operators
         from orbit.core.indexing import CellIndexer
         idx = CellIndexer(grid_with_OH.nz, grid_with_OH.ny, grid_with_OH.nx)
@@ -106,14 +106,14 @@ class TestAgingKBlocks:
         nox_to_no3_zero = np.zeros(
             (grid_with_OH.nz, grid_with_OH.ny, grid_with_OH.nx))
 
-        monkeypatch.setenv("ORBIT_VBS_FRAG", "1.0")
+        monkeypatch.setenv("ORBIT_VBS_AGING_GAIN", "1.0")
         _, K_sources_full, _, _ = assemble_species_operators(
             grid_with_OH, idx, scheme="exp",
             nox_to_no3_rate=nox_to_no3_zero,
         )
         K_full = K_sources_full[(IDX_VBS_C100, IDX_VBS_C1000)].diagonal()
 
-        monkeypatch.setenv("ORBIT_VBS_FRAG", "0.5")
+        monkeypatch.setenv("ORBIT_VBS_AGING_GAIN", "0.5")
         _, K_sources_half, _, _ = assemble_species_operators(
             grid_with_OH, idx, scheme="exp",
             nox_to_no3_rate=nox_to_no3_zero,
@@ -122,3 +122,30 @@ class TestAgingKBlocks:
 
         # K_half = 0.5 × K_full
         np.testing.assert_allclose(K_half, 0.5 * K_full, rtol=1e-12)
+
+
+def test_default_aging_gain_is_tsimpidi_1075(grid_with_OH, monkeypatch):
+    """Tsimpidi et al. (2010) R2/R4/R7: the next-lower bin receives 1.075 x
+    the aged mass (7.5% added oxygen); no fragmentation loss."""
+    monkeypatch.delenv("ORBIT_VBS_AGING_GAIN", raising=False)
+    monkeypatch.delenv("ORBIT_VBS_FRAG", raising=False)
+    from orbit.core.operator import assemble_species_operators
+    from orbit.core.indexing import CellIndexer
+    idx = CellIndexer(grid_with_OH.nz, grid_with_OH.ny, grid_with_OH.nx)
+    zero = np.zeros((grid_with_OH.nz, grid_with_OH.ny, grid_with_OH.nx))
+    L, K_sources, _, _ = assemble_species_operators(
+        grid_with_OH, idx, scheme="exp", nox_to_no3_rate=zero)
+    src, dst = IDX_VBS_C1000, IDX_VBS_C100
+    gain = -K_sources[(dst, src)].diagonal()
+    loss = 4.0e-11 * grid_with_OH.archive_OH.ravel()
+    np.testing.assert_allclose(gain, 1.075 * loss, rtol=1e-12)
+
+
+def test_legacy_frag_variable_is_rejected(grid_with_OH, monkeypatch):
+    monkeypatch.setenv("ORBIT_VBS_FRAG", "0.75")
+    from orbit.core.operator import assemble_species_operators
+    from orbit.core.indexing import CellIndexer
+    idx = CellIndexer(grid_with_OH.nz, grid_with_OH.ny, grid_with_OH.nx)
+    zero = np.zeros((grid_with_OH.nz, grid_with_OH.ny, grid_with_OH.nx))
+    with pytest.raises(ValueError, match="ORBIT_VBS_AGING_GAIN"):
+        assemble_species_operators(grid_with_OH, idx, scheme="exp", nox_to_no3_rate=zero)

@@ -1,4 +1,4 @@
-"""DCOMP chemistry closure: per-bin oxidants + operator-assembly rates.
+"""Chemistry closure: per-bin oxidants + operator-assembly rates.
 
 Bridges the orbit solve to the cell-local oxidants module.  For each of the
 8 UTC 3h bins, this module:

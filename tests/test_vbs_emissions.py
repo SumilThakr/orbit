@@ -25,19 +25,56 @@ class TestVBSYields:
     def test_known_parent_classes_present(self):
         expected = {
             "anthro_high_nox", "anthro_low_nox",
-            "bio_monoterpene", "bio_isoprene",
-            "biomass_burning", "ivoc",
+            "bio_monoterpene_high_nox", "bio_monoterpene_low_nox",
+            "bio_isoprene_high_nox", "bio_isoprene_low_nox",
+            "biomass_burning_high_nox", "biomass_burning_low_nox",
+            "ivoc_high_nox", "ivoc_low_nox",
         }
         assert expected.issubset(set(list_parent_classes()))
 
-    def test_total_yields_in_chamber_range(self):
-        """Sums match published total yields within chamber-uncertainty bands."""
-        # Tsimpidi 2010 monoterpene low-NOx total = 1.158
-        assert abs(VBS_PARENT_YIELDS["bio_monoterpene"].sum() - 1.158) < 0.05
-        # Anthro high-NOx total = 0.417
-        assert abs(VBS_PARENT_YIELDS["anthro_high_nox"].sum() - 0.417) < 0.02
-        # Grieshop 2009 BB total = 0.890
-        assert abs(VBS_PARENT_YIELDS["biomass_burning"].sum() - 0.890) < 0.05
+    def test_rows_match_the_sources(self):
+        """Tsimpidi (2010) Table 2 rows at C* = 1, 10, 100, 1000; nothing at 0.1."""
+        t2 = {
+            "anthro_high_nox": (0.003, 0.165, 0.300, 0.435),          # ARO1
+            "anthro_low_nox": (0.075, 0.225, 0.375, 0.525),
+            "bio_monoterpene_high_nox": (0.012, 0.122, 0.201, 0.500),  # TERP
+            "bio_monoterpene_low_nox": (0.107, 0.092, 0.359, 0.600),
+            "bio_isoprene_high_nox": (0.001, 0.023, 0.015, 0.000),     # ISOP
+            "bio_isoprene_low_nox": (0.009, 0.030, 0.015, 0.000),
+        }
+        for key, row in t2.items():
+            assert VBS_PARENT_YIELDS[key][0] == 0.0
+            np.testing.assert_allclose(VBS_PARENT_YIELDS[key][1:], row)
+        # Hodzic (2016) IVOC: most mass in the lowest bin
+        for key in ("ivoc_high_nox", "ivoc_low_nox"):
+            y = VBS_PARENT_YIELDS[key]
+            assert y[0] == y.max()
+        # low-NOx yields are at least the high-NOx yields in total, every class
+        for cls, (hi, lo) in NOX_REGIME_PAIRS.items():
+            assert VBS_PARENT_YIELDS[lo].sum() >= VBS_PARENT_YIELDS[hi].sum(), cls
+
+    def test_biomass_burning_rows_reproduce_from_gfed_shares(self):
+        """scripts/bb_voc_yields.py with the recorded 2022 GFED5.1 shares."""
+        import importlib.util, os
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        spec = importlib.util.spec_from_file_location(
+            "bb_voc_yields", os.path.join(here, "scripts", "bb_voc_yields.py"))
+        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        shares = {"C6H6": 0.232, "C7H8": 0.130, "C8H10": 0.035, "Higher_Alkenes": 0.147,
+                  "Higher_Alkanes": 0.068, "C5H8": 0.104, "C10H16": 0.285}
+        hi, lo = mod.weighted_rows(shares)
+        np.testing.assert_allclose(VBS_PARENT_YIELDS["biomass_burning_high_nox"], hi, atol=1.5e-3)
+        np.testing.assert_allclose(VBS_PARENT_YIELDS["biomass_burning_low_nox"], lo, atol=1.5e-3)
+
+    def test_regime_yields_interpolates(self):
+        from orbit.emissions.vbs_yields import regime_yields
+        y_hi = VBS_PARENT_YIELDS["anthro_high_nox"]; y_lo = VBS_PARENT_YIELDS["anthro_low_nox"]
+        np.testing.assert_allclose(regime_yields("anthro", 1.0), y_hi)
+        np.testing.assert_allclose(regime_yields("anthro", 0.0), y_lo)
+        F = np.full((2, 3, 4), 0.25)
+        y = regime_yields("anthro", F)
+        assert y.shape == (2, 5, 3, 4)
+        np.testing.assert_allclose(y[1, :, 0, 0], 0.25 * y_hi + 0.75 * y_lo)
 
     def test_C_star_decade_alignment(self):
         """Yields are tied to C* = (0.1, 1, 10, 100, 1000) µg/m³ — guard

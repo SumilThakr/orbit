@@ -20,14 +20,16 @@ import numpy as np
 from orbit.core.deposition import N_SPECIES, IDX_VBS_BINS
 
 
-# CAMS biogenic VOC monoterpene/isoprene split for SAS (Sindelarova 2014 SI
-# tropical default 15/85). Override with ORBIT_BIO_VOC_SPLIT="monoterpene:X;isoprene:Y".
-_BIO_VOC_SPLIT_DEFAULT = {"monoterpene": 0.15, "isoprene": 0.85}
+# CAMS biogenic VOC monoterpene/isoprene mass split. Sindelarova et al.
+# (2014, ACP 14, 9317) Table 1: global isoprene 594 and monoterpenes
+# 95 Tg/yr, so 0.14 / 0.86 (1.0.2 used 0.15 / 0.85, attributed to the
+# paper's SI). Override with ORBIT_BIO_VOC_SPLIT="monoterpene:X;isoprene:Y".
+_BIO_VOC_SPLIT_DEFAULT = {"monoterpene": 0.14, "isoprene": 0.86}
 
 
 def parse_bio_voc_split(spec):
     """Parse an ORBIT_BIO_VOC_SPLIT spec ("monoterpene:X;isoprene:Y") into
-    a {class: fraction} dict layered over the SAS-tropical 15/85 default.
+    a {class: fraction} dict layered over the Sindelarova Table 1 14/86 default.
     Malformed entries are skipped rather than fatal."""
     out = dict(_BIO_VOC_SPLIT_DEFAULT)
     if not spec:
@@ -48,22 +50,62 @@ def parse_bio_voc_split(spec):
 BIO_VOC_SPLIT = parse_bio_voc_split(os.environ.get("ORBIT_BIO_VOC_SPLIT", ""))
 
 
-def compute_nox_regime(grid):
-    """Return F_HIGH_NOX(ny, nx) from archive [NO2]/[OH].
+# Generic peroxy-radical rate constants, MCM (Jenkin et al. 1997; Saunders et
+# al. 2003): KRO2NO = 2.7e-12 exp(360/T), KRO2HO2 = 2.91e-13 exp(1300/T),
+# both in cm3 molec-1 s-1.
+K_RO2_NO_A, K_RO2_NO_B = 2.7e-12, 360.0
+K_RO2_HO2_A, K_RO2_HO2_B = 2.91e-13, 1300.0
+K_BOLTZ = 1.380649e-23          # J/K
+# HO2/OH ratio used to estimate HO2 from the archived OH. Boundary-layer
+# measurements put HO2/OH at roughly 10 to 100, lower in NO-rich air
+# (Stone, Whalley and Heard 2012, Chem. Soc. Rev. 41, 6348). The GEOS-Chem
+# archive ORBIT reads carries OH, NO and NO2 but not HO2. The value 50 is an
+# ORBIT assumption (1.0.3); replacing it with an archived HO2 field is a
+# 1.0.4 candidate.
+HO2_TO_OH_RATIO = float(os.environ.get("ORBIT_HO2_TO_OH_RATIO", "50"))
 
-    Smooth sigmoid centred at log10([NO2]/[OH]) = 1.5 with 0.5-decade
-    transition width. Falls back to F = 0.5 (regime-neutral) if either
-    archive field is absent.
+
+def compute_nox_regime(grid):
+    """Return F_HIGH_NOX(ny, nx): the fraction of RO2 that reacts with NO.
+
+    beta = k_NO [NO] / (k_NO [NO] + k_HO2 [HO2]), the branching ratio that
+    Lane et al. (2008, Atmos. Environ. 42, 7439), Henze et al. (2008, ACP
+    8, 2405) and Pye et al. (2010, ACP 10, 11261) use to interpolate between
+    high-NOx (RO2 + NO) and low-NOx (RO2 + HO2) SOA yields. Surface layer
+    of this bin's grid.
+
+    Units: archive_NO is in ppbv and is converted to molec cm-3 with the
+    layer pressure and temperature; archive_OH is in molec cm-3 and HO2 is
+    taken as HO2_TO_OH_RATIO x OH (see above). Through 1.0.2 this function
+    compared log10(NO2 [ppbv] / OH [molec cm-3]) with a threshold of 1.5,
+    which mixed units and put every cell in the low-NOx regime
+    (docs/notes/1.0.3_fixes/model_issues_2026-10-09.md, issue 3).
+
+    Falls back to F = 0.5 (regime-neutral) if either archive field is absent.
     """
-    no2 = getattr(grid, "archive_NO2", np.array([]))
+    no = getattr(grid, "archive_NO", np.array([]))
     oh = getattr(grid, "archive_OH", np.array([]))
-    if no2.size == 0 or oh.size == 0:
+    if no.size == 0 or oh.size == 0:
         return np.full((grid.ny, grid.nx), 0.5, dtype=np.float64)
-    no2_surf = no2[0]
-    oh_surf = np.maximum(oh[0], 1.0)
-    ratio = no2_surf / oh_surf
-    log_ratio = np.log10(np.maximum(ratio, 1e-12))
-    return 1.0 / (1.0 + np.exp(-(log_ratio - 1.5) / 0.5))
+    T = getattr(grid, "Temperature", np.array([]))
+    P = getattr(grid, "Pressure", np.array([]))
+    T_surf = T[0] if T.size else np.full((grid.ny, grid.nx), 298.0)
+    P_surf = P[0] if P.size else np.full((grid.ny, grid.nx), 101325.0)
+    n_air = P_surf / (K_BOLTZ * T_surf) * 1e-6            # molec cm-3
+    no_molec = np.maximum(no[0], 0.0) * 1e-9 * n_air
+    ho2_molec = np.maximum(oh[0], 0.0) * HO2_TO_OH_RATIO
+    k_no = K_RO2_NO_A * np.exp(K_RO2_NO_B / T_surf)
+    k_ho2 = K_RO2_HO2_A * np.exp(K_RO2_HO2_B / T_surf)
+    num = k_no * no_molec
+    den = num + k_ho2 * ho2_molec
+    with np.errstate(invalid="ignore", divide="ignore"):
+        beta = np.where(den > 0.0, num / den, 0.5)
+    return np.clip(beta, 0.0, 1.0)
+
+
+def compute_nox_regime_per_bin(grids):
+    """F_HIGH_NOX for each bin grid, stacked to (n_bins, ny, nx)."""
+    return np.stack([compute_nox_regime(g) for g in grids], axis=0)
 
 
 def bin_indices_in_solver_layout():
@@ -87,7 +129,7 @@ def distribute_voc_to_vbs_bins(
     voc_mass_total : float
         Diagnostic — total VOC mass (sum over time, space) for logging.
     """
-    from orbit.emissions.vbs_yields import VBS_PARENT_YIELDS, NOX_REGIME_PAIRS
+    from orbit.emissions.vbs_yields import NOX_REGIME_PAIRS, regime_yields
     from orbit.emissions.netcdf import load_netcdf_source, load_netcdf_source_per_bin
     if bio_voc_split is None:
         bio_voc_split = BIO_VOC_SPLIT
@@ -98,36 +140,28 @@ def distribute_voc_to_vbs_bins(
     if pcls is None:
         return np.zeros((n_bins, N_SPECIES * N), dtype=np.float64), 0.0
 
-    # Per-cell yields tuple (low-to-high C*) given the regime mix for
-    # this parent class.
+    # Per-cell, per-bin effective yields (n_bins, 5, ny, nx). Every class
+    # interpolates between its high- and low-NOx sets with the RO2 + NO
+    # branching ratio F (1.0.3; through 1.0.2 only the anthropogenic class
+    # did). F_HIGH_NOX is (ny, nx) for one map shared by every bin, or
+    # (n_bins, ny, nx) for a per-bin map.
+    F = np.asarray(F_HIGH_NOX, dtype=np.float64)
+    if F.ndim == 2:
+        F = np.broadcast_to(F[None], (n_bins, ny, nx))
     if pcls == "bio_voc":
         # CAMS biogenic VOC: lumped monoterpene + isoprene file. Split
-        # by ORBIT_BIO_VOC_SPLIT (default SAS-tropical 15/85 from
-        # Sindelarova 2014 SI), then combine the per-class yields.
-        y_mono = VBS_PARENT_YIELDS["bio_monoterpene"]
-        y_iso  = VBS_PARENT_YIELDS["bio_isoprene"]
-        f_mono = bio_voc_split.get("monoterpene", 0.15)
-        f_iso  = bio_voc_split.get("isoprene",    0.85)
-        y_combined = f_mono * y_mono + f_iso * y_iso        # (5,)
-        yields_eff = np.broadcast_to(
-            y_combined[:, None, None], (5, ny, nx)
-        ).copy()
+        # by ORBIT_BIO_VOC_SPLIT (default 14/86 from Sindelarova 2014
+        # Table 1), then combine the per-class yields.
+        f_mono = bio_voc_split.get("monoterpene", 0.14)
+        f_iso  = bio_voc_split.get("isoprene",    0.86)
+        yields_eff = (f_mono * regime_yields("bio_monoterpene", F)
+                      + f_iso * regime_yields("bio_isoprene", F))    # (n_bins, 5, ny, nx)
     elif pcls in NOX_REGIME_PAIRS:
-        hi_key, lo_key = NOX_REGIME_PAIRS[pcls]
-        y_hi = VBS_PARENT_YIELDS[hi_key]   # (5,)
-        y_lo = VBS_PARENT_YIELDS[lo_key]
-        # Per-cell effective yields (5, ny, nx)
-        F = F_HIGH_NOX[None, :, :]   # (1, ny, nx)
-        yields_eff = (F * y_hi[:, None, None] +
-                      (1.0 - F) * y_lo[:, None, None])     # (5, ny, nx)
-    elif pcls in VBS_PARENT_YIELDS:
-        yields_eff = np.broadcast_to(
-            VBS_PARENT_YIELDS[pcls][:, None, None], (5, ny, nx)
-        ).copy()
+        yields_eff = regime_yields(pcls, F)                           # (n_bins, 5, ny, nx)
     else:
         raise ValueError(
             f"Unknown VBS parent class '{pcls}' for source {voc_source.path}; "
-            f"valid: {list(VBS_PARENT_YIELDS) + list(NOX_REGIME_PAIRS)} + 'bio_voc'"
+            f"valid: {list(NOX_REGIME_PAIRS)} + 'bio_voc'"
         )
 
     # Load per-source (slot 0 = raw VOC mass on the loader's 6-species axis).
@@ -154,8 +188,9 @@ def distribute_voc_to_vbs_bins(
     contrib = np.zeros((n_bins, N_SPECIES * N), dtype=np.float64)
     voc_mass_total = 0.0
     for tau in range(n_bins):
+        y_tau = yields_eff[tau]                                   # (5, ny, nx)
         for i_bin, solver_s in enumerate(bin_solver_idx):
-            bin_3d = yields_eff[i_bin, None] * voc_mass_per_bin_3d[tau]   # (nz, ny, nx)
+            bin_3d = y_tau[i_bin, None] * voc_mass_per_bin_3d[tau]   # (nz, ny, nx)
             contrib[tau, solver_s * N:(solver_s + 1) * N] += bin_3d.ravel()
         voc_mass_total += float(voc_mass_per_bin_3d[tau].sum())
 

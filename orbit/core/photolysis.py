@@ -1,4 +1,4 @@
-"""Photolysis rates for DCOMP diagnostic chemistry.
+"""Photolysis rates for the diagnostic chemistry closure.
 
 Provides per-bin j_NO2 and j_O1D (and related) photolysis rates from:
   (a) a clear-sky TUV 5.4 lookup table, j_clear(SZA, O3_column)

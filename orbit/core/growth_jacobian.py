@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from orbit.core.constants import SIA_GROWTH_RH35, ORG_GROWTH_RH35
 from orbit.core.constants import N_TO_NH4, N_TO_NO3, S_TO_SO4
 from orbit.core.deposition import (
     IDX_PM25, IDX_POA, IDX_TOTAL_NH, IDX_PSO4, IDX_TOTAL_NO3, IDX_VBS_BINS,
@@ -59,6 +60,7 @@ def apply_growth_transpose(
     *,
     p_nh4_surface_per_bin: np.ndarray | None = None,
     p_no3_surface_per_bin: np.ndarray | None = None,
+    pm25_rh35: bool = False,
 ) -> np.ndarray:
     """Map surface deaths gradient S (per bin) to its element-mass receptor.
 
@@ -87,6 +89,13 @@ def apply_growth_transpose(
         If None, the function looks at grids[tau].NHPartitioning /
         NO3Partitioning as a fallback and warns if they're empty.
 
+    pm25_rh35 : bool
+        False (default): receptor of the dry compound-mass PM2.5. True: the
+        GEOS-Chem 35 % RH mass, SIA_GROWTH_RH35 on the inorganic terms and
+        ORG_GROWTH_RH35 on POA and the VBS bins (primary PM unchanged: its
+        sea salt is grown at emission). Must match the field the deaths
+        gradient was linearised on and marginal._compute_delta_pm25.
+
     Returns
     -------
     receptor : ndarray, shape (N_BINS, N_SPECIES, N)
@@ -106,6 +115,8 @@ def apply_growth_transpose(
 
     receptor = np.zeros((N_BINS, N_SPECIES, N), dtype=np.float64)
     c_star = np.asarray(C_STAR_VALS, dtype=np.float64)
+    g_sia = SIA_GROWTH_RH35 if pm25_rh35 else 1.0
+    g_org = ORG_GROWTH_RH35 if pm25_rh35 else 1.0
 
     # 3D index layout: indexer flattens as (z, y, x) → z * ny * nx + y * nx + x.
     # Surface block is the FIRST (ny * nx) entries (z=0).
@@ -179,7 +190,7 @@ def apply_growth_transpose(
         # zero for the 84.7% of CEDS anthropogenic primary mass POA carries.
         # Guarded for pre-split 13-species baselines.
         if N_SPECIES > IDX_POA:
-            receptor[tau, IDX_POA, :surface_size] = S_flat / D
+            receptor[tau, IDX_POA, :surface_size] = g_org * S_flat / D
 
         # TotalNH: coefficient p_nh · N_TO_NH4. Surface slice. p_nh may
         # have arrived as a full 3D (`g.NHPartitioning`, size N) or as
@@ -194,11 +205,11 @@ def apply_growth_transpose(
                 f"surface_size={surface_size} (surface-only)."
             )
         receptor[tau, IDX_TOTAL_NH, :surface_size] = (
-            S_flat * p_nh_surf * N_TO_NH4
+            g_sia * S_flat * p_nh_surf * N_TO_NH4
         )
 
         # pSO4: coefficient S_TO_SO4.
-        receptor[tau, IDX_PSO4, :surface_size] = S_flat * S_TO_SO4
+        receptor[tau, IDX_PSO4, :surface_size] = g_sia * S_flat * S_TO_SO4
 
         # TotalNO3: coefficient p_no3 · N_TO_NO3.
         if p_no3.size == N:
@@ -211,7 +222,7 @@ def apply_growth_transpose(
                 f"surface_size={surface_size} (surface-only)."
             )
         receptor[tau, IDX_TOTAL_NO3, :surface_size] = (
-            S_flat * p_no3_surf * N_TO_NO3
+            g_sia * S_flat * p_no3_surf * N_TO_NO3
         )
 
         # VBS bins: coefficient F_p_i / D. D was computed above, shared
@@ -221,7 +232,7 @@ def apply_growth_transpose(
                 # F_p shape: (5, nz, ny, nx). Surface = [i, 0, :, :].
                 F_p_surface = F_p[i, 0].ravel()
                 receptor[tau, sp_idx, :surface_size] = (
-                    S_flat * F_p_surface / D
+                    g_org * S_flat * F_p_surface / D
                 )
 
     return receptor

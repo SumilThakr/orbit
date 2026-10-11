@@ -32,7 +32,8 @@ from orbit.core.deposition import (
 )
 
 
-# Fountoukis & Nenes 2007: crustal Ca fraction of fine dust
+# Crustal Ca mass fraction of fine dust: an ORBIT assumption (not in
+# Fountoukis and Nenes 2007, which was cited for it through 1.0.2).
 _DUST_TO_CA = 0.036
 # Seinfeld & Pandis Table 9.7: Na fraction of fine sea salt
 _SEASALT_TO_NA = 0.306
@@ -95,15 +96,6 @@ def partitioning_per_bin(
     These are the linearised NH4↔NO3↔SO4 ISORROPIA cross-couplings
     that iso-coupled marginal mode uses to capture ammonium/nitrate
     competition without re-running the LUT.
-
-    Plus a per-cell asymmetry diagnostic (Phase 6a-rev / tipping-points
-    follow-up paper):
-
-      f_nh_marg_asym, f_no3_marg_asym : |f(+δ) + f(-δ) - 2·f(0)|
-                                        / max(|f(+δ)| + |f(-δ)|, 1e-12)
-                                        per cell. Cells with large
-                                        asymmetry sit near regime
-                                        thresholds (basin boundary).
 
     SO4 row of the 3×3 block is not computed: the LUT does not carry
     f_so4 (only f_nh4 + f_no3 are stored), and pSO4 is treated as
@@ -175,10 +167,6 @@ def partitioning_per_bin(
             dNH_minus > 0, (base_part_nh - f_nh_m * NH_minus) / np.maximum(dNH_minus, 1e-30), f_nh_eq,
         )
         f_nh_marg = np.clip(0.5 * (deriv_nh_plus + deriv_nh_minus), 0.0, 1.0)
-        f_nh_marg_asym = (
-            np.abs(f_nh_p + f_nh_m - 2.0 * f_nh_eq)
-            / np.maximum(np.abs(f_nh_p) + np.abs(f_nh_m), 1e-12)
-        )
 
         # NO3 probe (±δ on totalNO3)
         NO3_plus  = totalNO3 * (1.0 + d) + 1e-12
@@ -198,18 +186,12 @@ def partitioning_per_bin(
             dNO3_minus > 0, (base_part_no3 - f_no3_m * NO3_minus) / np.maximum(dNO3_minus, 1e-30), f_no3_eq,
         )
         f_no3_marg = np.clip(0.5 * (deriv_no3_plus + deriv_no3_minus), 0.0, 1.0)
-        f_no3_marg_asym = (
-            np.abs(f_no3_p + f_no3_m - 2.0 * f_no3_eq)
-            / np.maximum(np.abs(f_no3_p) + np.abs(f_no3_m), 1e-12)
-        )
 
         bin_out = {
             "f_nh_eq":          f_nh_eq.reshape((nz, ny, nx)),
             "f_nh_marg":        f_nh_marg.reshape((nz, ny, nx)),
             "f_no3_eq":         f_no3_eq.reshape((nz, ny, nx)),
             "f_no3_marg":       f_no3_marg.reshape((nz, ny, nx)),
-            "f_nh_marg_asym":   f_nh_marg_asym.reshape((nz, ny, nx)),
-            "f_no3_marg_asym":  f_no3_marg_asym.reshape((nz, ny, nx)),
         }
 
         if include_cross_partials:

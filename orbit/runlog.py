@@ -372,9 +372,9 @@ class RssSampler:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
-        # ORBIT_RSS_TRACE=<path> appends "seconds phase rss_mb" at every
+        # ORBIT_RSS_LOG=<path> appends "seconds phase rss_mb" at every
         # sample: a memory timeline to read against the solve log.
-        self._trace = os.environ.get("ORBIT_RSS_TRACE") or None
+        self._trace = os.environ.get("ORBIT_RSS_LOG") or None
         self._t0 = time.time()
 
     def _sample(self):

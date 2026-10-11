@@ -1,6 +1,6 @@
 """Per-bin j(NO2) actinic field for the SOA photolytic-loss sink.
 
-The VBS SoA scheme (orbit/core/dcomp_vbs.py + the aging cascade in
+The VBS SoA scheme (orbit/core/vbs_partitioning.py + the aging cascade in
 orbit/core/operator.py) has OH-driven aging + fragmentation but no
 photolytic / heterogeneous condensed-phase loss. GC limits biomass-burning
 SOA via SOA photolysis; without it ORBIT over-produces spring SOA ~4x.
@@ -11,7 +11,7 @@ This module supplies the actinic-flux proxy for that sink:
 
 j_NO2 is taken from the existing TUV 5.4 clear-sky lookup table
 (orbit/core/photolysis.py), evaluated per orbit bin from analytic solar
-geometry. Only the j_NO2 *field* is used here — NOT the dormant DCOMP OH
+geometry. Only the j_NO2 *field* is used here — NOT the dormant chemistry-closure OH
 PSS / O3 chemistry that the LUT once fed (that arc was scoped out on
 2026-04-24). The j_NO2
 itself validated to ~+/-15% vs HEMCO FAST-JX, which is well inside the
@@ -38,7 +38,7 @@ import numpy as np
 from orbit.core.photolysis import PhotolysisLUT, j_per_bin
 
 # ORBIT bin centres (UTC minutes past midnight), mirroring
-# orbit/core/dcomp.py:_BIN_CENTER_MIN (8 UTC 3h bins).
+# orbit/core/chemistry_closure.py:_BIN_CENTER_MIN (8 UTC 3h bins).
 _BIN_CENTER_MIN = (90, 270, 450, 630, 810, 990, 1170, 1350)
 
 # Default TUV clear-sky LUT (jNO2_clear over SZA x O3-column).

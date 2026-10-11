@@ -10,13 +10,13 @@ where M_OA is total organic aerosol mass acting as the absorbing medium:
     M_OA = Σ_i F_p,i × C_i
 
 This is implicit in M_OA (it appears on both sides), so we solve the
-fixed-point per cell via vectorized Newton iteration. The function is
-strictly monotonic + contractive in M_OA, so 3–5 iterations converge to
-1e-6 relative tolerance.
+fixed-point per cell by a vectorized Picard (fixed-point) iteration. The
+map is monotonic and contractive in M_OA, so a few iterations converge to
+the 1e-3 relative tolerance used in production.
 
 This module provides:
 - pankow_F_p(M_OA, C_star)         — per-cell partitioning fraction
-- solve_M_OA(C_bins, ...)          — vectorized Newton fixed-point
+- solve_M_OA(C_bins, ...)          — vectorized Picard fixed-point
 - update_vbs_partitioning(grid, c) — closure step that writes
                                      grid.M_OA + grid.F_p_vbs
 
@@ -32,7 +32,7 @@ collapsed and effective anthropogenic yield fell from a nominal 0.417 to
 0.0021.
 
 Adding a non-negative constant leaves the fixed point monotone and
-contractive, so the Newton iteration is unchanged apart from the term.
+contractive, so the Picard iteration is unchanged apart from the term.
 
 References:
 - Pankow, J. F. (1994). An absorption model of gas/particle partitioning
@@ -123,7 +123,7 @@ def solve_M_OA(
     tol : float
         Relative convergence tolerance on max |ΔM_OA| / M_OA.
     maxiter : int
-        Maximum Newton iterations.
+        Maximum Picard iterations.
     M_OA_init : ndarray or float, optional
         Initial M_OA guess. Defaults to _M_OA_BOOTSTRAP (10 µg/m³)
         broadcast to the trailing shape.
@@ -218,7 +218,7 @@ def update_vbs_partitioning(
 ) -> dict:
     """Closure step: write grid.M_OA_3d + grid.F_p_vbs from c_mean.
 
-    Mirrors update_grid_partitioning() in orbit/core/dcomp_isorropia.py
+    Mirrors update_grid_partitioning() in orbit/core/isorropia_closure.py
     in spirit: reads the species concentrations the operator has just
     produced, runs the implicit closure, writes the converged
     partitioning fields into the grid for the next operator rebuild.

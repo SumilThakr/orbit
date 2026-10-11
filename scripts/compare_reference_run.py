@@ -15,7 +15,7 @@ This script therefore normalizes by array scale (the 99.9th percentile of
 
 - state arrays (concentrations, PM2.5, deposition, budgets):
     REPRODUCED iff max scaled diff <= 1e-6.
-- FD-derivative arrays (f_*_d*_3d, *_marg_asym_3d):
+- FD-derivative arrays (f_*_d*_3d):
     REPRODUCED iff the fraction of cells with scaled diff > 1e-6 is
     <= 2e-3 AND scaled RMS <= 3e-5. Isolated boundary flips pass; any
     systematic change (different LUT, physics, emissions) fails the RMS
@@ -43,7 +43,7 @@ FD_RMS_TOL = 3e-5
 
 # ISORROPIA finite-difference cross-partials and their asymmetry
 # diagnostics: the arrays with known benign near-discontinuity flips.
-FD_PATTERNS = ("f_*_d*_3d", "*_marg_asym_3d")
+FD_PATTERNS = ("f_*_d*_3d",)
 
 HEADLINE_KEYS = ("pm25_surf", "pm25_surface", "pm25_mean", "total_pm25_surf")
 

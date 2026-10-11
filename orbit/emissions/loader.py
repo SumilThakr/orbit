@@ -424,6 +424,59 @@ def _strip_tier_suffix(basename: str) -> str:
     return basename
 
 
+DYNAMIC_PROFILE_KINDS = ("henry_temperature",)
+
+
+@dataclass(frozen=True)
+class DynamicProfile:
+    """A diurnal profile computed from the bin meteorology, not a 24-h table."""
+    name: str
+    kind: str
+
+
+def henry_temperature_weight(T_kelvin: np.ndarray) -> np.ndarray:
+    """Henry's-law temperature factor for NH3 over a livestock/manure surface,
+    H(T) = (161500 / T) exp(-10380 / T) (Nemitz et al. 2000, as used by Zhu
+    et al. 2015, Eq. 3). Only its diurnal shape matters here."""
+    T = np.asarray(T_kelvin, dtype=np.float64)
+    return 161500.0 / T * np.exp(-10380.0 / T)
+
+
+def dynamic_profile_factors(profile: DynamicProfile, grids, n_bins: int) -> np.ndarray:
+    """Per-bin, per-cell multipliers (n_bins, ny, nx) with bin-mean 1 per cell.
+
+    ``grids`` is the list of per-bin grids. If a single grid is passed for
+    all bins (no per-bin meteorology), the profile degenerates to flat and a
+    warning is issued, because the emission budget would otherwise be
+    altered by a meteorology that does not vary with the bin.
+    """
+    if len(grids) != n_bins:
+        raise ValueError(f"dynamic profile '{profile.name}' needs {n_bins} bin "
+                         f"grids, got {len(grids)}")
+    g0 = grids[0]
+    if all(g is g0 for g in grids):
+        warnings.warn(f"Diurnal profile '{profile.name}' ({profile.kind}) needs "
+                      f"per-bin meteorology but one grid was given for every "
+                      f"bin; emitting bin-flat.", stacklevel=2)
+        return np.ones((n_bins, g0.ny, g0.nx), dtype=np.float64)
+    if profile.kind == "henry_temperature":
+        w = np.stack([henry_temperature_weight(g.Temperature[0]) for g in grids],
+                     axis=0)                                   # (n_bins, ny, nx)
+    else:
+        raise ValueError(f"unknown dynamic profile kind '{profile.kind}'")
+    mean = w.mean(axis=0, keepdims=True)
+    return np.where(mean > 0.0, w / np.where(mean > 0.0, mean, 1.0), 1.0)
+
+
+def scale_by_bin_factor(factor, arr) -> np.ndarray:
+    """Multiply an emission slab by a bin factor that is either a scalar or a
+    per-cell (ny, nx) map (the last two axes of ``arr`` are (ny, nx))."""
+    f = np.asarray(factor, dtype=np.float64)
+    if f.ndim == 0:
+        return float(f) * arr
+    return arr * f.reshape((1,) * (arr.ndim - 2) + f.shape)
+
+
 @dataclass
 class DiurnalConfig:
     """Configuration for diurnal-resolved emissions in the orbit solver.
@@ -433,6 +486,16 @@ class DiurnalConfig:
     """
     ist_offset_hours: float = 5.5
     profiles: Dict[str, np.ndarray] = field(default_factory=dict)
+    # Meteorology-driven profiles: name -> {"kind": ...}. These have no fixed
+    # 24-h shape; their per-bin, per-cell factors are computed from the bin
+    # grids by ``dynamic_profile_factors``. Kinds:
+    #   henry_temperature  -- w(T) = (161500 / T) exp(-10380 / T), the
+    #       Henry's-law temperature factor of the GEOS-Chem livestock NH3
+    #       diurnal scheme (Zhu et al. 2015, ACP 15, 12823, Eqs. 2-3, after
+    #       Nemitz et al. 2000), evaluated on each bin's surface air
+    #       temperature and normalised to a bin-mean of 1 per cell. The
+    #       aerodynamic-resistance factor of Eq. 2 is not applied.
+    dynamic_profiles: Dict[str, Dict[str, str]] = field(default_factory=dict)
     source_profiles: Dict[str, str] = field(default_factory=dict)
     source_profiles_by_month: Dict[int, Dict[str, str]] = field(default_factory=dict)
     # basenames already warned about, so the fall-through warning fires once
@@ -486,6 +549,8 @@ class DiurnalConfig:
                     f"'flat' explicitly in source_profiles to silence this.",
                     stacklevel=2)
             return _DEFAULT_FLAT_PROFILE
+        if name in self.dynamic_profiles:
+            return DynamicProfile(name, self.dynamic_profiles[name]["kind"])
         if name not in self.profiles:
             warnings.warn(f"Diurnal profile '{name}' referenced by {basename} "
                           f"not defined; falling back to flat")
@@ -517,7 +582,16 @@ class DiurnalConfig:
         ist = float(data.get("ist_offset_hours", 5.5))
         raw_profiles = data.get("profiles", {}) or {}
         profiles: Dict[str, np.ndarray] = {}
+        dynamic: Dict[str, Dict[str, str]] = {}
         for name, body in raw_profiles.items():
+            if isinstance(body, dict) and "kind" in body:
+                kind = str(body["kind"])
+                if kind not in DYNAMIC_PROFILE_KINDS:
+                    raise ValueError(
+                        f"Diurnal profile '{name}': unknown kind '{kind}'; "
+                        f"valid: {sorted(DYNAMIC_PROFILE_KINDS)}")
+                dynamic[name] = {"kind": kind}
+                continue
             if isinstance(body, dict):
                 hours = body.get("hours")
             else:
@@ -545,6 +619,7 @@ class DiurnalConfig:
         return cls(
             ist_offset_hours=ist,
             profiles=profiles,
+            dynamic_profiles=dynamic,
             source_profiles=sp,
             source_profiles_by_month=sp_by_m,
         )
@@ -590,9 +665,27 @@ def _local_to_utc_bin_factors(
     return factors
 
 
+def as_bin_grids(grid_or_grids, n_bins: int) -> List[GridData]:
+    """Normalise a single grid or a per-bin list of grids to a list of n_bins."""
+    if isinstance(grid_or_grids, (list, tuple)):
+        grids = list(grid_or_grids)
+        if len(grids) != n_bins:
+            raise ValueError(f"expected {n_bins} bin grids, got {len(grids)}")
+        return grids
+    return [grid_or_grids] * n_bins
+
+
+def _source_needs_bin_met(source: EmissionSource) -> bool:
+    """True for elevated sources whose injection layer comes from the ASME
+    plume rise, which depends on each bin's wind, temperature and stability."""
+    return bool(source.elevated and source.layer_index is None
+                and source.stack_diam > 0 and source.stack_temp > 0
+                and source.stack_vel > 0)
+
+
 def load_emissions_diurnal(
     sources: List[EmissionSource],
-    grid: GridData,
+    grid,
     indexer: CellIndexer,
     diurnal_cfg: Optional[DiurnalConfig] = None,
     month: int = 1,
@@ -600,6 +693,14 @@ def load_emissions_diurnal(
     verbose: bool = False,
 ) -> np.ndarray:
     """Build per-bin emission vectors for the orbit solver.
+
+    Parameters
+    ----------
+    grid : GridData or list of GridData
+        One grid, or the list of per-bin grids. With the list, elevated
+        sources compute their plume rise from each bin's meteorology (1.0.3;
+        through 1.0.2 the 00-03 UTC bin's injection layer was used for all
+        8 bins) and meteorology-driven diurnal profiles can be evaluated.
 
     Returns
     -------
@@ -609,6 +710,9 @@ def load_emissions_diurnal(
         day-mean = 1.0 — the budget is preserved.
     """
     N = indexer.N
+    grids = as_bin_grids(grid, n_bins)
+    grid = grids[0]
+    per_bin_met = any(g is not grid for g in grids)
     e_per_bin = np.zeros((n_bins, N_ORBIT_SPECIES * N), dtype=np.float64)
 
     # Per-source: either read pre-binned (n_bins, lat, lon) slabs and
@@ -623,11 +727,11 @@ def load_emissions_diurnal(
             from orbit.emissions.shapefile import load_shapefile_source
             monthly_4d = load_shapefile_source(source, grid, verbose)
             monthly_4d[0] = 0.0
-            factors = _factors_for_source(source, diurnal_cfg, month, n_bins)
+            factors = _factors_for_source(source, diurnal_cfg, month, n_bins, grids)
             if verbose:
-                print(f"    profile factors (UTC) = {np.round(factors, 3)}")
+                print(f"    profile factors (UTC) = {_describe_factors(factors)}")
             for tau in range(n_bins):
-                slab = factors[tau] * monthly_4d
+                slab = scale_by_bin_factor(factors[tau], monthly_4d)
                 _accumulate_into_bin(e_per_bin, tau, slab, N)
             continue
 
@@ -645,16 +749,35 @@ def load_emissions_diurnal(
                 _accumulate_into_bin(e_per_bin, tau, slabs[tau], N)
         else:
             from orbit.emissions.netcdf import load_netcdf_source
-            monthly_4d = load_netcdf_source(source, grid, verbose)
-            monthly_4d[0] = 0.0
-            factors = _factors_for_source(source, diurnal_cfg, month, n_bins)
+            factors = _factors_for_source(source, diurnal_cfg, month, n_bins, grids)
             if verbose:
-                print(f"    profile factors (UTC) = {np.round(factors, 3)}")
-            for tau in range(n_bins):
-                slab = factors[tau] * monthly_4d
-                _accumulate_into_bin(e_per_bin, tau, slab, N)
+                print(f"    profile factors (UTC) = {_describe_factors(factors)}")
+            if per_bin_met and _source_needs_bin_met(source):
+                # Plume rise per bin: the injection layer (and the cell
+                # volume it is divided by) follow this bin's meteorology.
+                if verbose:
+                    print("    plume rise evaluated per bin")
+                for tau in range(n_bins):
+                    monthly_4d = load_netcdf_source(source, grids[tau], False)
+                    monthly_4d[0] = 0.0
+                    slab = scale_by_bin_factor(factors[tau], monthly_4d)
+                    _accumulate_into_bin(e_per_bin, tau, slab, N)
+            else:
+                monthly_4d = load_netcdf_source(source, grid, verbose)
+                monthly_4d[0] = 0.0
+                for tau in range(n_bins):
+                    slab = scale_by_bin_factor(factors[tau], monthly_4d)
+                    _accumulate_into_bin(e_per_bin, tau, slab, N)
 
     return e_per_bin
+
+
+def _describe_factors(factors: np.ndarray) -> str:
+    f = np.asarray(factors)
+    if f.ndim == 1:
+        return str(np.round(f, 3))
+    return (f"per-cell, bin means over the domain "
+            f"{np.round(f.mean(axis=(1, 2)), 3)}")
 
 
 def _factors_for_source(
@@ -662,12 +785,24 @@ def _factors_for_source(
     diurnal_cfg: Optional[DiurnalConfig],
     month: int,
     n_bins: int,
+    grids=None,
 ) -> np.ndarray:
+    """Per-bin multipliers for a source: (n_bins,) for a tabulated profile,
+    (n_bins, ny, nx) for a meteorology-driven one (needs ``grids``, the
+    per-bin grid list; without it the dynamic profile falls back to flat
+    with a warning)."""
     if diurnal_cfg is None:
         return np.ones(n_bins, dtype=np.float64)
-    profile_24h = diurnal_cfg.profile_for(source.path, month)
+    profile = diurnal_cfg.profile_for(source.path, month)
+    if isinstance(profile, DynamicProfile):
+        if grids is None:
+            warnings.warn(f"Diurnal profile '{profile.name}' ({profile.kind}) "
+                          f"for {os.path.basename(source.path)} needs the bin "
+                          f"grids; none given, emitting bin-flat.", stacklevel=2)
+            return np.ones(n_bins, dtype=np.float64)
+        return dynamic_profile_factors(profile, list(grids), n_bins)
     return _local_to_utc_bin_factors(
-        profile_24h, diurnal_cfg.ist_offset_hours, n_bins=n_bins
+        profile, diurnal_cfg.ist_offset_hours, n_bins=n_bins
     )
 
 

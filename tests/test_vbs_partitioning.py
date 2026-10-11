@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from orbit.core.dcomp_vbs import pankow_F_p, solve_M_OA
+from orbit.core.vbs_partitioning import pankow_F_p, solve_M_OA
 from orbit.core.deposition import C_STAR_VALS, IDX_VBS_BINS, N_VBS_BINS
 
 

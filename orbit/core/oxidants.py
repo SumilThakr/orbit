@@ -1,4 +1,4 @@
-"""Cell-local per-bin diagnostic oxidants for DCOMP chemistry.
+"""Cell-local per-bin diagnostic oxidants for the chemistry closure.
 
 Computes [OH], [HO2], the NO/NO2 photostationary-state split, and nighttime
 [NO3]/[N2O5] from precursor concentrations, met state, and photolysis rates.
@@ -140,9 +140,11 @@ def k_OH_H2O2(T):
 
 
 def k_OH_NO2(T, M):
-    """OH + NO2 + M -> HNO3 + M. Pressure-dependent.
-    Uses Troe-form with JPL 19-5 parameters for the low-/high-pressure limits."""
-    k0 = 1.8e-30 * (T / 300.0) ** (-3.0) * M
+    """OH + NO2 + M -> HNO3 + M (HONO2 channel). JPL 19-5 (Burkholder et al.
+    2020) Table 2-1 entry I4: k0 = 1.8e-30 (T/298)^-3.0, kinf = 2.8e-11
+    (m = 0), Fc = 0.6 in the JPL Troe form (Eq. 2.3). Referenced to T/298,
+    as JPL defines it (the 1.0.2 code used T/300)."""
+    k0 = 1.8e-30 * (T / 298.0) ** (-3.0) * M
     kinf = 2.8e-11
     Fc = 0.6
     ratio = k0 / kinf
@@ -151,10 +153,13 @@ def k_OH_NO2(T, M):
 
 
 def k_OH_SO2(T, M):
-    """OH + SO2 + M -> HSO3 + M (initiates aqueous/gas sulfate production).
-    Pressure-dependent Troe form with JPL 19-5 parameters."""
-    k0 = 3.3e-31 * (T / 300.0) ** (-4.3) * M
-    kinf = 1.6e-12
+    """OH + SO2 + M -> HSO3 + M (initiates sulfate production). JPL 19-5
+    (Burkholder et al. 2020) Table 2-1 entry C4: k0 = 2.9e-31 (T/298)^-4.1
+    cm6 molecule-2 s-1, kinf = 1.7e-12 (T/298)^0.2 cm3 molecule-1 s-1,
+    Fc = 0.6. The 1.0.2 values (3.3e-31 (T/300)^-4.3, 1.6e-12) were labelled
+    JPL 19-5 but were not its entries."""
+    k0 = 2.9e-31 * (T / 298.0) ** (-4.1) * M
+    kinf = 1.7e-12 * (T / 298.0) ** 0.2
     Fc = 0.6
     ratio = k0 / kinf
     k = (k0 / (1.0 + ratio)) * Fc ** (1.0 / (1.0 + (np.log10(ratio)) ** 2))
@@ -168,8 +173,9 @@ def k_NO2_O3(T):
 
 def Keq_N2O5(T):
     """NO3 + NO2 <-> N2O5 equilibrium constant (cm3/molec).
-    JPL: K = 3.5e-27 * exp(11000/T)."""
-    return 3.5e-27 * np.exp(11000.0 / T)
+    JPL 19-5 (Burkholder et al. 2020) Table 3-1, note 11:
+    K = 5.8e-27 exp(10840/T). (1.0.2 used 3.5e-27 exp(11000/T).)"""
+    return 5.8e-27 * np.exp(10840.0 / T)
 
 
 def k_RO2_NO(T):

@@ -10,7 +10,7 @@ backward-compatibility guarantee the regression gate depends on.
 import numpy as np
 import pytest
 
-from orbit.core.dcomp_vbs import pankow_F_p, solve_M_OA
+from orbit.core.vbs_partitioning import pankow_F_p, solve_M_OA
 from orbit.core.deposition import C_STAR_VALS, IDX_POA, N_SPECIES, N_VBS_BINS
 
 
@@ -90,15 +90,18 @@ def test_idx_poa_is_last_so_existing_indices_are_stable():
 def test_the_documented_suppression_is_reproduced():
     """Sanity-check the previously measured yield suppression.
 
-    With M_OA ~2 the anthropogenic yield set (0.067 at C*=100, 0.350 at
-    C*=1000) realises ~0.002; with POA present it recovers by an order of
-    magnitude. This is the motivation for the whole change.
+    With M_OA ~2 the anthropogenic high-NOx yield set realises only a small
+    fraction of its nominal total; with POA present (M_OA ~17) it recovers
+    several-fold. This is the motivation for the whole change. (The 1.0.2
+    table, 0.067 at C* = 100 and 0.350 at C* = 1000 only, realised ~0.002;
+    the 1.0.3 Tsimpidi ARO1 row also has mass at C* = 1 and 10, so the
+    suppression is weaker but still large.)
     """
     from orbit.emissions.vbs_yields import VBS_PARENT_YIELDS
     y = VBS_PARENT_YIELDS["anthro_high_nox"]
     eff = lambda m: float((y * np.array([1 / (1 + c / m) for c in C_STAR_VALS])).sum())
-    assert eff(2.1) < 0.005
-    assert eff(17.0) > 5 * eff(2.1)
+    assert eff(2.1) < 0.1 * y.sum()
+    assert eff(17.0) > 3 * eff(2.1)
 
 
 # ---------------------------------------------------------------------------

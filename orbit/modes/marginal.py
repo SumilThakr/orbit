@@ -229,7 +229,7 @@ def run_marginal_month(
                 f"underprediction at sulfate-saturated populated cells. "
                 f"Re-run forward to regenerate the baseline with the "
                 f"clipped cross-derivative extraction (forward solver "
-                f"and dcomp_isorropia updated 2026-05-01). Or call with "
+                f"and isorropia_closure updated 2026-05-01). Or call with "
                 f"iso_coupling=False to disable iso-coupling entirely "
                 f"(chemistry-DAG only)."
             )
@@ -357,7 +357,7 @@ def run_marginal_month(
         # accurate than per-bin (M_OA varies ~10% diurnally) — refresh the
         # baseline with the updated forward driver for an exact VBS marginal.
         if "c_mean" in baseline.files:
-            from orbit.core.dcomp_vbs import update_vbs_partitioning
+            from orbit.core.vbs_partitioning import update_vbs_partitioning
             if verbose:
                 print("  WARNING: baseline lacks F_p_vbs_marg_3d; rebuilding "
                       "VBS partitioning from orbit-mean c_mean (broadcast to "
@@ -386,7 +386,7 @@ def run_marginal_month(
     # 5. Build δe.
     t0 = time.time()
     delta_e_SN = build_delta_emissions(
-        perturbation, baseline_sources, grids[0], indexer,
+        perturbation, baseline_sources, grids, indexer,
         month=month, n_bins=N_BINS, diurnal_cfg=diurnal_cfg,
         verbose=verbose,
     )
@@ -480,7 +480,7 @@ def run_marginal_month(
     # Iso K-block keys flagged for the end-of-bin time-level convention
     # in the orbit solver. Iso K-blocks are the linearisation of an
     # implicit operator coefficient; their c_baseline factor is built at
-    # end-of-bin τ (see dcomp_isorropia._concentration_for_bin), so the
+    # end-of-bin τ (see isorropia_closure._concentration_for_bin), so the
     # corresponding δc_other forcing must also read end-of-bin (τ+1) to
     # keep time-levels matched within the linearised term. Chemistry-DAG
     # K-blocks (SO2 → pSO4, NOx → TotalNO3) use start-of-bin per the
@@ -643,7 +643,7 @@ def run_marginal_month(
         # ORBIT_MARGINAL_FCT_SOLVER selects gmres|anderson|picard (the
         # last two retained as diagnostics; Picard's residual ratios read
         # off K's dominant eigenvalue directly).
-        from orbit.core.dcomp_iter import AndersonAccelerator
+        from orbit.core.closure_iteration import AndersonAccelerator
         FCT_SOLVER = os.environ.get("ORBIT_MARGINAL_FCT_SOLVER", "gmres")
         FCT_MAX_ITERS = int(os.environ.get(
             "ORBIT_MARGINAL_FCT_MAX_ITERS",
@@ -762,6 +762,11 @@ def run_marginal_month(
     delta_pm25_orbit, delta_pm25_mean = _compute_delta_pm25(
         delta_c_orbit, grids, nz, ny, nx, N, baseline_vbs_c=baseline_vbs_c,
     )
+    # Also at 35 % RH (the health-chain mass, 1.0.3); same linearisation.
+    delta_pm25_rh35_orbit, delta_pm25_rh35_mean = _compute_delta_pm25(
+        delta_c_orbit, grids, nz, ny, nx, N, baseline_vbs_c=baseline_vbs_c,
+        pm25_rh35=True,
+    )
 
     # 11. Save δNPZ.
     t0 = time.time()
@@ -786,6 +791,8 @@ def run_marginal_month(
         "delta_c_mean": delta_c_mean.astype(np.float64),
         "delta_pm25_orbit": delta_pm25_orbit.astype(np.float64),
         "delta_pm25_mean": delta_pm25_mean.astype(np.float64),
+        "delta_pm25_rh35_orbit": delta_pm25_rh35_orbit.astype(np.float64),
+        "delta_pm25_rh35_mean": delta_pm25_rh35_mean.astype(np.float64),
         "orbit_species_order": np.arange(N_SPECIES),
         "solved_species": np.array(sorted(solve_species), dtype=np.int64),
         "gmres_iters": result["gmres_iters"],
@@ -841,6 +848,7 @@ def _compute_delta_pm25(
     grids,
     nz: int, ny: int, nx: int, N: int,
     baseline_vbs_c: np.ndarray = None,  # (N_BINS, 5, nz, ny, nx), IDX_VBS_BINS order
+    pm25_rh35: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Linearised δPM2.5 from δc using the baseline f_marg fields.
 
@@ -857,8 +865,15 @@ def _compute_delta_pm25(
     first-order error (validated: 1/D closes marg vs exact to ~0.2%). Falls
     back to F_p,i·δC_i (no feedback) when M_OA / baseline C_k are unavailable.
     p_nh and p_no3 come from the baseline marginal partitioning fields.
+    pm25_rh35=True returns the GEOS-Chem 35 % RH mass instead of the dry
+    compound mass (SIA_GROWTH_RH35 on inorganics, ORG_GROWTH_RH35 on POA and
+    SoA; primary PM unchanged), in lockstep with
+    growth_jacobian.apply_growth_transpose(pm25_rh35=True).
     """
-    from orbit.core.constants import N_TO_NH4, N_TO_NO3, S_TO_SO4
+    from orbit.core.constants import (N_TO_NH4, N_TO_NO3, S_TO_SO4,
+                                      SIA_GROWTH_RH35, ORG_GROWTH_RH35)
+    g_sia = SIA_GROWTH_RH35 if pm25_rh35 else 1.0
+    g_org = ORG_GROWTH_RH35 if pm25_rh35 else 1.0
 
     delta_pm25_orbit = np.zeros((N_BINS, nz, ny, nx), dtype=np.float64)
     C_star = np.asarray(C_STAR_VALS, dtype=np.float64)
@@ -927,11 +942,10 @@ def _compute_delta_pm25(
 
         d_pm25 = (
             d_pm
-            + d_poa
-            + d_soa
-            + p_nh * d_nh * N_TO_NH4
-            + d_pso4 * S_TO_SO4
-            + p_no3 * d_no3 * N_TO_NO3
+            + g_org * (d_poa + d_soa)
+            + g_sia * (p_nh * d_nh * N_TO_NH4
+                       + d_pso4 * S_TO_SO4
+                       + p_no3 * d_no3 * N_TO_NO3)
         )
         delta_pm25_orbit[tau] = d_pm25.reshape(nz, ny, nx)
 

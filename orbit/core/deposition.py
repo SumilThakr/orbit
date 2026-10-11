@@ -25,7 +25,7 @@ bins at 9 to 12 are listed after the constants):
 
 Kinetic off-diagonal couplings:
   SO2 -> pSO4   (existing)
-  NOx -> TotalNO3 (new in Phase 2/DCOMP)
+  NOx -> TotalNO3 (chemistry closure)
 
 O3 has no transported precursor; its chemistry comes from diagnostic
 HO2/RO2 produced by the oxidants module.
@@ -36,13 +36,15 @@ dry/wet deposition at regional scales. Enters the OH budget via the
 denominator, closing the CO <-> OH feedback within the outer iteration.
 """
 
+import warnings
+
 import numpy as np
 import scipy.sparse as sp
 from orbit.core.indexing import CellIndexer
 from orbit.core.grid_data import GridData
 from orbit.core.soa_photolysis import get_a_photo, soa_photolysis_rate
 
-# 13-species indices (DCOMP + CO + 1D VBS for SoA).
+# 13-species indices (inorganic chemistry + CO + 1D VBS for SoA).
 # Solve order groups sources before sinks:
 #   SO2 before pSO4, NOx before TotalNO3,
 #   VBS_C1000 before C100 before C10 before C1 before C01 (aging cascade).
@@ -51,7 +53,7 @@ from orbit.core.soa_photolysis import get_a_photo, soa_photolysis_rate
 # IDX_SOA = 0 is preserved as an alias for IDX_VBS_C100 so legacy code
 # paths that read "the SoA tracer" still compile; the canonical SoA mass
 # that contributes to PM2.5 is the F_p-weighted sum across all 5 VBS
-# bins (computed by the closure helper, see orbit/core/dcomp_vbs.py).
+# bins (computed by the closure helper, see orbit/core/vbs_partitioning.py).
 IDX_VBS_C100  = 0
 IDX_SOA       = IDX_VBS_C100   # alias; total SoA = F_p-weighted sum over bins
 IDX_PM25      = 1
@@ -67,7 +69,7 @@ IDX_VBS_C1    = 10
 IDX_VBS_C01   = 11
 IDX_VBS_C1000 = 12
 # POA (primary organic aerosol), carved out of PrimaryPM25 so that it can
-# act as absorbing mass in the VBS Pankow partitioning (orbit/core/dcomp_vbs)
+# act as absorbing mass in the VBS Pankow partitioning (orbit/core/vbs_partitioning)
 # and as the IVOC source term. Chemically inert and depositionally identical
 # to PrimaryPM25, so its operator is bit-identical and the LU factorisation
 # is shared. Appended last so every pre-existing index is unchanged.
@@ -179,17 +181,27 @@ def _get_no3_partitioning(grid: GridData) -> np.ndarray:
     return np.zeros((grid.nz, grid.ny, grid.nx))
 
 
+_HNO3_FALLBACK_WARNED = False
+
+
 def _get_hno3_vd(grid: GridData) -> np.ndarray:
     """HNO3 dry deposition velocity (m/s), 3D -> (nz, ny, nx).
 
-    If grid.HNO3_dry_dep is populated, use it. Otherwise fall back to a
-    constant 3 cm/s at surface (0.03 m/s), zero aloft — a reasonable
-    mid-range value for vegetated/polluted SAS continental conditions
-    (Nemitz et al. 2000, Zhang et al. 2003: 1-5 cm/s over most land).
-    Full land-use-dependent resistance formulation is a later refinement.
+    The 1.0.3 grids carry HNO3DryDep from the preprocessor's Wesely
+    resistance model (D_H2O/D_x = 1.9, H* = 1e14 M/atm, f0 = 0; Wesely
+    1989 Table 2), so R_c is negligible and R_a dominates: about 1.5 to
+    5 cm/s by day and 1 cm/s at night over land (Zhang et al. 2003). If
+    the field is missing (pre-1.0.3 grids) fall back to a constant 3 cm/s
+    at the surface, zero aloft, and warn once.
     """
     if hasattr(grid, "HNO3_dry_dep") and grid.HNO3_dry_dep.size > 0:
         return grid.HNO3_dry_dep
+    global _HNO3_FALLBACK_WARNED
+    if not _HNO3_FALLBACK_WARNED:
+        _HNO3_FALLBACK_WARNED = True
+        warnings.warn("grid has no HNO3DryDep field (pre-1.0.3 preprocessor "
+                      "output); using a constant 3 cm/s HNO3 dry deposition "
+                      "velocity at the surface.", stacklevel=2)
     vd = np.zeros((grid.nz, grid.ny, grid.nx))
     vd[0] = 0.03  # 3 cm/s at surface
     return vd
@@ -214,7 +226,7 @@ def _get_dry_dep_velocity_2d(grid: GridData, species_idx: int) -> np.ndarray:
     if species_idx in IDX_VBS_BINS:
         # VBS bin gas/particle partitioning per Pankow (1994). Uses the
         # closure-converged F_p,i fields written by
-        # orbit.core.dcomp_vbs.update_vbs_partitioning(). On the very
+        # orbit.core.vbs_partitioning.update_vbs_partitioning(). On the very
         # first solver pass (before the closure has run) F_p_vbs_surface
         # may be absent; fall back to pure particle in that case (the
         # closure overwrites this on iter 1+).
@@ -266,7 +278,13 @@ def _get_wet_dep_rate_3d(grid: GridData, species_idx: int) -> np.ndarray:
         if F_p_3d is None or F_p_3d.shape[0] != N_VBS_BINS:
             return grid.particle_wet_dep.copy()
         F_p_i = F_p_3d[bin_pos]
-        return F_p_i * grid.particle_wet_dep + (1.0 - F_p_i) * grid.other_gas_wet_dep
+        # Only the particle fraction is wet-scavenged. EMEP (Simpson et al.
+        # 2012, Table S20 note b) scavenges semivolatile organics in the
+        # particle phase only; the vapours span a wide range of solubility
+        # and are not given the HNO3/NH3 soluble-gas ratio. Through 1.0.2
+        # the gas fraction took other_gas_wet_dep, which was harmless only
+        # because that rate was ~1e6 too small (1.0.3 fix).
+        return F_p_i * grid.particle_wet_dep
     elif species_idx in (IDX_PM25, IDX_POA):
         return grid.particle_wet_dep.copy()
     elif species_idx == IDX_TOTAL_NH:
@@ -275,9 +293,12 @@ def _get_wet_dep_rate_3d(grid: GridData, species_idx: int) -> np.ndarray:
     elif species_idx == IDX_SO2:
         return grid.SO2_wet_dep.copy()
     elif species_idx == IDX_NOX:
-        # NOx: gas-phase deposition (NOx is not appreciably wet-deposited;
-        # the dominant wet-dep pathway is through HNO3 after oxidation).
-        return grid.other_gas_wet_dep.copy()
+        # NOx is not appreciably wet-deposited (EMEP scavenges neither NO
+        # nor NO2); its wet pathway is HNO3 after oxidation, carried by
+        # TotalNO3. Through 1.0.2 NOx took the soluble-gas rate, which was
+        # ~1e6 too small and so had no effect; with the corrected rate it
+        # would remove NOx at about twice its chemical loss rate.
+        return np.zeros_like(grid.other_gas_wet_dep)
     elif species_idx == IDX_PSO4:
         return grid.particle_wet_dep.copy()
     elif species_idx == IDX_TOTAL_NO3:
@@ -359,7 +380,7 @@ def _get_wet_dep_rate_scalar(grid, species_idx, k, j, i):
     elif species_idx == IDX_SO2:
         return grid.SO2_wet_dep[k, j, i]
     elif species_idx == IDX_NOX:
-        return grid.other_gas_wet_dep[k, j, i]
+        return 0.0          # not wet-deposited; see _get_wet_dep_rate_3d
     elif species_idx == IDX_PSO4:
         return grid.particle_wet_dep[k, j, i]
     elif species_idx == IDX_TOTAL_NO3:

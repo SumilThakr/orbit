@@ -112,7 +112,7 @@ class GridData:
     NHPartitioning: np.ndarray = field(default_factory=lambda: np.array([]))   # MARGINAL <Δp/(Δp+Δg)>
     NOPartitioning: np.ndarray = field(default_factory=lambda: np.array([]))   # MARGINAL (legacy lumped NOx+pNO3)
     AOrgPartitioning: np.ndarray = field(default_factory=lambda: np.array([]))  # MARGINAL
-    # DCOMP NO3 partitioning of the HNO3+pNO3 pool, populated by the Phase 3d
+    # NO3 partitioning of the HNO3+pNO3 pool, populated by the Phase 3d
     # outer iteration from ISORROPIA LUT queries at ORBIT's converged
     # TotalNO3 (not a preprocessor input). Marginal goes into the deposition
     # operator, equilibrium into PM2.5 mass extraction.
@@ -134,8 +134,9 @@ class GridData:
     gNO3: np.ndarray = field(default_factory=lambda: np.array([]))
     gS: np.ndarray = field(default_factory=lambda: np.array([]))
     pS: np.ndarray = field(default_factory=lambda: np.array([]))
-    # HNO3 and O3 dry dep fields (3D). Populated by deposition module
-    # with defaults if absent from bin files.
+    # HNO3 dry deposition (3D) from the preprocessor's Wesely model (1.0.3
+    # grids); O3 dry dep. The deposition module substitutes defaults when a
+    # field is absent from the bin files.
     HNO3_dry_dep: np.ndarray = field(default_factory=lambda: np.array([]))
     O3_dry_dep: np.ndarray = field(default_factory=lambda: np.array([]))
 
@@ -178,7 +179,7 @@ class GridData:
     archive_NO2: np.ndarray = field(default_factory=lambda: np.array([]))         # ppbv
     archive_NO3rad: np.ndarray = field(default_factory=lambda: np.array([]))      # ppbv
 
-    # DCOMP oxidant-diagnosis inputs (optional — ISOP..NAP from Phase 2a rerun,
+    # Oxidant-diagnosis inputs for the chemistry closure (optional — ISOP..NAP from Phase 2a rerun,
     # HNO2 from Phase 3 rerun). Compound mass ug/m3 except CLDTOT (0-1) and Pblh (m).
     ISOP: np.ndarray = field(default_factory=lambda: np.array([]))
     MTPA: np.ndarray = field(default_factory=lambda: np.array([]))
@@ -213,7 +214,7 @@ _GRID_INPUT_VARS = frozenset([
     "UAvg", "VAvg", "UAvg_plus", "UAvg_minus", "VAvg_plus", "VAvg_minus",
     "K_meander_u", "K_meander_v",
     "Kzz", "Kxxyy",
-    "ParticleDryDep", "SO2DryDep", "NOxDryDep", "NH3DryDep", "VOCDryDep",
+    "ParticleDryDep", "SO2DryDep", "NOxDryDep", "NH3DryDep", "HNO3DryDep", "VOCDryDep",
     "ParticleWetDep", "SO2WetDep", "OtherGasWetDep",
     "SO2oxidation", "NHPartitioning", "NOPartitioning",
     "aOrgPartitioning", "AOrgPartitioning",
@@ -384,6 +385,7 @@ def load_grid(preprocessor_path: str, constants_path: Optional[str] = None,
         ("SO2DryDep", "SO2_dry_dep"),
         ("NOxDryDep", "NOx_dry_dep"),
         ("NH3DryDep", "NH3_dry_dep"),
+        ("HNO3DryDep", "HNO3_dry_dep"),     # 1.0.3 grids; older grids lack it
         ("VOCDryDep", "VOC_dry_dep"),
         ("ParticleWetDep", "particle_wet_dep"),
         ("SO2WetDep", "SO2_wet_dep"),

@@ -462,7 +462,7 @@ def assemble_species_operators(
     # and the grid carries bin-resolved archive oxidants, fall back to the
     # archive-driven rate (k_OH+NO2 · [OH] · fNO2 daytime + N2O5 hydrolysis
     # night via NO2+NO3rad thermal equilibrium). Mirrors the so2_ox_rate
-    # fallback to grid.SO2oxidation above. DCOMP callers can still pass
+    # fallback to grid.SO2oxidation above. Chemistry-closure callers can still pass
     # an explicit oxidants-module rate to override.
     if nox_to_no3_rate is None and getattr(grid, "archive_OH", np.array([])).size > 0:
         from orbit.core.nox_to_no3_rate import build_nox_to_no3_rate
@@ -497,31 +497,54 @@ def assemble_species_operators(
 
     # VBS aging: OH-driven first-order cascade C1000 → C100 → C10 → C1 → C01.
     # Linear couplings parallel to SO2 → pSO4 (one off-diagonal per source-
-    # destination pair). Source loses at rate k_age × [OH] per molecule;
-    # destination gains at α_frag × (loss rate), routing the (1 - α_frag)
-    # fraction to fragmentation (mass loss to gas-phase residual that we
-    # don't transport). archive_OH is in molec/cm³; k_age in cm³/molec/s,
-    # so the product is in 1/s as required.
-    #
-    # Defaults: k_age = 4e-11 (Tsimpidi 2010 / CMAQ); α_frag = 0.75
-    # (Lane 2008 central).
+    # destination pair). The vapour of a bin is lost at k_age × [OH]; the
+    # next-lower bin gains AGING_GAIN times that mass. Tsimpidi et al.
+    # (2010, ACP 10, 525, Sect. 2.1.3): k_age = 4e-11 cm3 molecule-1 s-1
+    # on the gas phase, with a 7.5% mass increase per step for the added
+    # oxygen, so AGING_GAIN = 1.075 and mass grows by design. Through 1.0.2
+    # the destination received 0.75 of the aged mass (ORBIT_VBS_FRAG, a 25%
+    # fragmentation loss attributed to Lane 2008); that is gone.
+    # archive_OH is in molec/cm³; k_age in cm³/molec/s, so the product is
+    # in 1/s as required.
     K_age_loss = {}        # dict[src_idx] -> csc_matrix
     K_age_src = {}         # dict[(dst_idx, src_idx)] -> csc_matrix
     if getattr(grid, "archive_OH", np.array([])).size > 0:
-        from orbit.core.deposition import VBS_AGING_PAIRS
+        from orbit.core.deposition import VBS_AGING_PAIRS, IDX_VBS_BINS
         K_OH_AGE = float(os.environ.get("ORBIT_VBS_K_AGE", "4.0e-11"))
-        ALPHA_FRAG = float(os.environ.get("ORBIT_VBS_FRAG", "0.75"))
+        # Mass transferred to the next-lower bin per unit mass aged
+        # (Tsimpidi 2010: 1.075). ORBIT_VBS_FRAG is honoured as a legacy
+        # alias so old run scripts fail loudly rather than silently.
+        if "ORBIT_VBS_FRAG" in os.environ:
+            raise ValueError("ORBIT_VBS_FRAG was removed in 1.0.3; set "
+                             "ORBIT_VBS_AGING_GAIN (default 1.075) instead.")
+        AGING_GAIN = float(os.environ.get("ORBIT_VBS_AGING_GAIN", "1.075"))
         N = indexer.N
         idx = np.arange(N, dtype=np.int64)
         # Surface OH only — aging happens in PBL where OH is meaningful.
         # Above k=0, archive OH is effectively zero in practice, but we
         # use the full 3D field to be physically consistent.
-        rate_flat = (K_OH_AGE * grid.archive_OH).ravel()
+        rate_oh = (K_OH_AGE * grid.archive_OH).ravel()
+        # Gas-phase aging only (Tsimpidi et al. 2010, Sect. 2.1.3, reactions
+        # R2, R4, R7): the loss from a bin is k_age [OH] x its vapour
+        # fraction (1 - F_p). Through 1.0.2 the whole bin total aged, so in
+        # polluted cells, where the C* = 1 and 10 bins are mostly
+        # particulate, SOA mass was fragmented away about every 1.5 h at
+        # midday OH (docs/notes/1.0.3_fixes/model_issues_2026-10-09.md,
+        # issue 4). F_p_vbs is written by the VBS closure
+        # (orbit/core/vbs_partitioning.py); before the first closure pass it
+        # is absent and every bin is treated as all-vapour, as before.
+        F_p_vbs = getattr(grid, "F_p_vbs", None)
         for src_idx, dst_idx in VBS_AGING_PAIRS:
+            if F_p_vbs is not None and F_p_vbs.shape[0] == len(IDX_VBS_BINS):
+                F_p_src = np.clip(
+                    F_p_vbs[IDX_VBS_BINS.index(src_idx)], 0.0, 1.0).ravel()
+                rate_flat = rate_oh * (1.0 - F_p_src)
+            else:
+                rate_flat = rate_oh
             K_age_loss[src_idx] = sp.csc_matrix(
                 (rate_flat, (idx, idx)), shape=(N, N))
             K_age_src[(dst_idx, src_idx)] = sp.csc_matrix(
-                (-ALPHA_FRAG * rate_flat, (idx, idx)), shape=(N, N))
+                (-AGING_GAIN * rate_flat, (idx, idx)), shape=(N, N))
             K_sources[(dst_idx, src_idx)] = K_age_src[(dst_idx, src_idx)]
 
     # Extract diagonal loss vectors per species

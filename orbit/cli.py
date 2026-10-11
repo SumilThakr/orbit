@@ -54,19 +54,19 @@ from orbit.core.deposition import (
     N_SPECIES, IDX_SOA, IDX_PM25, IDX_POA, IDX_TOTAL_NH, IDX_SO2, IDX_NOX,
     IDX_PSO4, IDX_TOTAL_NO3, IDX_O3,
 )
-from orbit.core.dcomp import (
+from orbit.core.chemistry_closure import (
     compute_chemistry_per_bin, chemistry_diagnostics,
     splice_oh_into_chem, rebuild_rates_from_chem,
 )
-from orbit.core.dcomp_iter import (
+from orbit.core.closure_iteration import (
     ConvergenceHistory, build_iteration_metrics, print_metrics,
     plausibility_check, check_invariants, under_relax_oxidants,
     AndersonAccelerator, DEFAULT_TOL,
 )
-from orbit.core.dcomp_isorropia import (
+from orbit.core.isorropia_closure import (
     update_grid_partitioning, partitioning_summary,
 )
-from orbit.core.dcomp_vbs import (
+from orbit.core.vbs_partitioning import (
     update_vbs_partitioning,
 )
 from orbit.core.photolysis import PhotolysisLUT
@@ -318,7 +318,7 @@ def _named_cell_iso_report(result, grids, iso_per_bin, nz, ny, nx,
                             prev_values, noon_tau=2, print_prefix="    "):
     """Per-iter named-cell diagnostic for the ISORROPIA-only Picard loop.
 
-    Strips out DCOMP-only fields (OH, HO2, k_so2) since on
+    Strips out chemistry-closure fields (OH, HO2, k_so2) since on
     feat/orbit-isorropia-archive those rates are archive-prescribed and
     don't change between iso iters. Reports f_NH4_eq, f_NO3_eq (LUT) and
     c_NH / c_pSO4 / c_TotalNO3 (which DO change as the operator updates),
@@ -538,6 +538,7 @@ def _parse_voc_parent_classes(spec):
 # the rest of this module is unchanged.
 from orbit.emissions.vbs_distribution import (
     compute_nox_regime as _compute_nox_regime,
+    compute_nox_regime_per_bin as _compute_nox_regime_per_bin,
     bin_indices_in_solver_layout as _bin_indices_in_solver_layout,
     distribute_voc_to_vbs_bins as _distribute_voc_to_vbs_bins,
 )
@@ -618,7 +619,7 @@ def _build_emission_sources(month, verbose=True):
     return sources
 
 
-_VERSION = "1.0.0"
+_VERSION = "1.0.3"
 
 
 def _record_configuration(args, months):
@@ -655,7 +656,7 @@ def _record_configuration(args, months):
     R.set_config("ISORROPIA LUT", os.path.basename(str(args.lut)), True, "--lut")
     for label, env, default in (
         ("VBS k_age", "ORBIT_VBS_K_AGE", "4.0e-11"),
-        ("VBS fragmentation", "ORBIT_VBS_FRAG", "0.75"),
+        ("VBS aging mass gain", "ORBIT_VBS_AGING_GAIN", "1.075"),
         ("VBS photolysis A", "ORBIT_VBS_A_PHOTO", "0"),
         ("IVOC scaling", "ORBIT_IVOC_SCALING", "1.5"),
     ):
@@ -982,6 +983,27 @@ class _BasinFlipDetector:
         return int(self.flip_no3.sum()), int(self.flip_nh4.sum())
 
 
+# GEOS-Chem PM2.5 convention at 35% relative humidity (aerosol_mod.F90:
+# SIA_GROWTH 1.10 on sulfate, nitrate and ammonium; ORG_GROWTH 1.05 on
+# organic aerosol; SSA_GROWTH 1.86 on sea salt, which ORBIT applies at
+# emission). ORBIT's own PM2.5 is dry compound mass; the 35% RH field is
+# what the CPCB and satellite evaluations compare with (1.0.3).
+from orbit.core.constants import SIA_GROWTH_RH35, ORG_GROWTH_RH35  # noqa: E402
+
+
+def _pm25_at_rh35(pm25_dry, c_pm, c_poa, c_soa):
+    """PM2.5 at 35% RH from the dry total and its carbonaceous parts.
+
+    1.10 x (SO4 + NO3 + NH4) + 1.05 x (SOA + POA) + c_PM, where c_PM (black
+    carbon, dust, the non-carbonaceous primary and sea salt) gets no further
+    growth because sea salt was multiplied by 1.86 at emission. The 1.05 goes
+    on all POA as well as SOA (GEOS-Chem applies it to hydrophilic OC and
+    SOA; most POA becomes hydrophilic within about a day).
+    """
+    inorg = np.maximum(pm25_dry - c_pm - c_poa - c_soa, 0.0)
+    return c_pm + ORG_GROWTH_RH35 * (c_poa + c_soa) + SIA_GROWTH_RH35 * inorg
+
+
 def _pm25_per_bin(orbits, grids, N, nz, ny, nx):
     """Compute 4D PM2.5 (bin, k, j, i) from the orbit, using equilibrium
     partitioning when available and marginal otherwise.  Matches the
@@ -1040,7 +1062,7 @@ def _assemble_and_solve(grids, indexer, emissions_SN, N,
     If both k_so2_per_bin and k_nox_per_bin are None, reproduces the baseline
     prescribed-chemistry behaviour (grid.SO2oxidation only; NOx->TotalNO3
     inactive).  If provided, the per-bin override rates are passed to
-    `assemble_species_operators` to activate the DCOMP chemistry couplings.
+    `assemble_species_operators` to activate the chemistry-closure couplings.
 
     Phase 3e: if ``k_o3_loss_per_bin`` is provided, O3 chemistry loss
     diagonal is installed in the operator and ``s_o3_source_per_bin`` is
@@ -1353,7 +1375,7 @@ def _history_from_conv_dict(conv_dict):
     but means the final classification output may lose oscillation
     evidence for iters that pre-date the restart.
     """
-    from orbit.core.dcomp_iter import IterationMetrics
+    from orbit.core.closure_iteration import IterationMetrics
     history = ConvergenceHistory()
     if not conv_dict:
         return history
@@ -1719,7 +1741,7 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
         # the gOrg/voc variable, so all of their contribution is slot 0
         # which is zeroed.
         emissions_old_per_bin = load_emissions_diurnal(
-            sources, grids[0], indexer,
+            sources, grids, indexer,
             diurnal_cfg=diurnal_cfg, month=month, n_bins=N_BINS,
             verbose=(diurnal_cfg is not None),
         )  # (N_BINS, 6*N) — slot 0 is zero
@@ -1730,8 +1752,10 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
                     emissions_old_per_bin[tau, old_s * N:(old_s + 1) * N]
                 )
 
-        # Stage B: per-VOC-source distribution across the 5 VBS bins.
-        F_HIGH_NOX = _compute_nox_regime(grids[0])
+        # Stage B: per-VOC-source distribution across the 5 VBS bins. The
+        # NOx regime is evaluated on every bin's grid (n_bins, ny, nx), as
+        # the adjoint does; through 1.0.2 the forward used bin 0 only.
+        F_HIGH_NOX = _compute_nox_regime_per_bin(grids)
         voc_diag = []
         for source in sources:
             if source.voc_parent_class is None:
@@ -1754,8 +1778,10 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
         # The share is now inventory-derived — POA is 1.8×OC from the same
         # CEDS files the PM2.5 tiers were built from — and measures 0.847,
         # so the old proxy understated IVOC by ~2.8x.
-        from orbit.emissions.vbs_yields import VBS_PARENT_YIELDS
-        ivoc_yields = VBS_PARENT_YIELDS["ivoc"]   # (5,)
+        from orbit.emissions.vbs_yields import regime_yields
+        # IVOC yields (Hodzic et al. 2016) interpolated per cell and bin
+        # with the same RO2 + NO branching ratio as the other classes.
+        ivoc_yields_per_bin = regime_yields("ivoc", F_HIGH_NOX)   # (N_BINS, 5, ny, nx)
         bin_solver_idx = _bin_indices_in_solver_layout()
         ivoc_total = 0.0
         # Prefer a real POA source when the manifest provides one; fall back
@@ -1774,19 +1800,28 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
         for source in _ivoc_srcs:
             n_ivoc_sources += 1
             from orbit.emissions.netcdf import load_netcdf_source
-            from orbit.emissions.loader import _factors_for_source
-            monthly = load_netcdf_source(source, grids[0], verbose=False)
-            poa_3d = monthly[_ivoc_slot]        # 6 = POA (new), 1 = PM2.5 proxy
-            ivoc_emis_3d = _ivoc_frac * poa_3d
+            from orbit.emissions.loader import (
+                _factors_for_source, _source_needs_bin_met, scale_by_bin_factor,
+            )
+            # Elevated POA tiers: plume rise per bin, as in the loader.
+            if _source_needs_bin_met(source):
+                monthly_per_bin = [load_netcdf_source(source, g, verbose=False)
+                                   for g in grids]
+            else:
+                monthly_per_bin = [load_netcdf_source(source, grids[0],
+                                                      verbose=False)] * N_BINS
             if diurnal_cfg is None:
                 factors = np.ones(N_BINS)
             else:
-                factors = _factors_for_source(source, diurnal_cfg, month, N_BINS)
+                factors = _factors_for_source(source, diurnal_cfg, month,
+                                              N_BINS, grids)
             for tau in range(N_BINS):
-                voc_mass_3d = factors[tau] * ivoc_emis_3d
+                # 6 = POA (new), 1 = PM2.5 proxy
+                ivoc_emis_3d = _ivoc_frac * monthly_per_bin[tau][_ivoc_slot]
+                voc_mass_3d = scale_by_bin_factor(factors[tau], ivoc_emis_3d)
                 ivoc_total += float(voc_mass_3d.sum())
                 for i_bin, solver_s in enumerate(bin_solver_idx):
-                    bin_3d = ivoc_yields[i_bin] * voc_mass_3d   # (nz, ny, nx)
+                    bin_3d = ivoc_yields_per_bin[tau, i_bin][None] * voc_mass_3d   # (nz, ny, nx)
                     emissions_SN[tau, solver_s * N:(solver_s + 1) * N] += (
                         bin_3d.ravel())
 
@@ -1838,7 +1873,7 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
         else:
             print("  Warm start: no prior orbit found, using s (one-cycle-from-zero)")
 
-    # 5. Load DCOMP chemistry inputs if chemistry iterations requested.
+    # 5. Load chemistry-closure inputs if chemistry iterations requested.
     photolysis_lut = None
     hemco_clim = None
     if chemistry_iters > 0:
@@ -2155,7 +2190,7 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
     # `update_grid_partitioning` writes BOTH `*Partitioning` (marginal,
     # d(f·c)/dc — used by the deposition operator) and `*PartitioningEq`
     # (equilibrium, f at current totals — used by mass extraction). the archive
-    # uses one quantity for both; ORBIT doesn't. See `dcomp_isorropia.py`
+    # uses one quantity for both; ORBIT doesn't. See `isorropia_closure.py`
     # docstring for the derivation. ISORROPIA inputs use totalSO4 = pSO4
     # alone (SO2 is not in the equilibrium pool — verified bug fix kept).
     #
@@ -2168,7 +2203,7 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
     #
     # Metric: max(p90(|ΔpNO3|/max(pNO3, F)), p90(|ΔpNH4|/max(pNH4, F)))
     # at the surface, F = 0.5 µg/m³. This matches the convention from
-    # dcomp_iter (FLOOR_PM = 1 µg/m³ for total PM2.5; pNO3/pNH4 are each
+    # closure_iteration (FLOOR_PM = 1 µg/m³ for total PM2.5; pNO3/pNH4 are each
     # ~half of PM2.5 over IGP, so 0.5 is the analogous per-species floor).
     # Mass floor (not partitioning floor): a clean-marine cell with pNO3
     # ≈ 0.05 µg/m³ doesn't gate (well below 0.5); a Delhi cell with pNO3
@@ -2178,6 +2213,12 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
     # cells are converged — see the iso loop's `_gate_metrics` docstring.
     FLOOR_PSPECIES_UGM3 = 0.5
     iso_closure_history = []   # per-iter (mean_fno3, no3_p90, nh4_p90)
+    # Did the inorganic closure meet its gate? None when the closure did not
+    # run. Saved as `iso_closure_converged`, and it is what `converged` in the
+    # output means when --chemistry-iters is 0 (the production setting).
+    # Through 1.0.2 `converged` came from the chemistry-iteration history,
+    # which never runs in production, so it read False for every month.
+    iso_closure_converged = None
     iso_named_cell_state = {}
     iso_accel = None
     iso_basin_flip = None
@@ -2417,11 +2458,21 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
                 print(f"  [iso] converged at iter {iso_it} "
                       f"(max(p90|ΔpNO3|, p90|ΔpNH4|)={gate_metric:.3e} "
                       f"< {closure_tol})")
+                iso_closure_converged = True
                 break
             prev_pno3_surf = new_pno3_surf
             prev_pnh4_surf = new_pnh4_surf
         else:
             # for/else: ran to max iters without break
+            iso_closure_converged = False
+            _RECORD.warn(
+                "closure",
+                f"ISORROPIA closure hit its cap of {isorropia_closure_iters} "
+                f"iterations with gate metric {gate_metric:.3e} >= {closure_tol}.",
+                impact="surface nitrate and ammonium fractions were still "
+                       "moving by more than the tolerance when the run stopped.",
+                fix="raise --isorropia-closure-iters or loosen --closure-tol.",
+            )
             print(f"  [iso] hit max iters ({isorropia_closure_iters}) "
                   f"with last gate metric={gate_metric:.3e} >= "
                   f"{closure_tol} — proceeding (IGP cells may still be "
@@ -2575,7 +2626,7 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
             closure_lut.release()
             partitioning_summary(prev_iso)
 
-        print(f"  [iter {it}] Reassembling + solving with DCOMP rates")
+        print(f"  [iter {it}] Reassembling + solving with closure chemistry rates")
         c_warm = np.empty(N_SPECIES * N, dtype=np.float64)
         for s in range(N_SPECIES):
             mean_s = np.mean([result["orbits"][s][tau + 1] for tau in range(N_BINS)],
@@ -2864,6 +2915,7 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
 
     t0 = time.time()
     pm25_orbit = np.zeros((N_BINS, nz, ny, nx), dtype=np.float64)
+    pm25_rh35_orbit = np.zeros((N_BINS, nz, ny, nx), dtype=np.float64)
     c_SN = np.empty(N_SPECIES * N, dtype=np.float64)
     for tau in range(N_BINS):
         for s in range(N_SPECIES):
@@ -2891,13 +2943,15 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
             # particle phase (upper bound). Later replaced by LUT.
             p_no3 = np.ones(N)
 
-        pm25_flat = (c_pm + c_poa + c_soa
-                     + p_nh * c_nh * N_TO_NH4
-                     + c_pso4 * S_TO_SO4
-                     + p_no3 * c_no3 * N_TO_NO3)
+        inorg_flat = (p_nh * c_nh * N_TO_NH4
+                      + c_pso4 * S_TO_SO4
+                      + p_no3 * c_no3 * N_TO_NO3)
+        pm25_flat = c_pm + c_poa + c_soa + inorg_flat
         pm25_orbit[tau] = pm25_flat.reshape((nz, ny, nx))
+        pm25_rh35_orbit[tau] = _pm25_at_rh35(pm25_flat, c_pm, c_poa, c_soa).reshape((nz, ny, nx))
 
     pm25_mean = pm25_orbit.mean(axis=0)
+    pm25_rh35_mean = pm25_rh35_orbit.mean(axis=0)
 
     # Orbit-mean concentrations: mean of c_1..c_8
     c_orbit = np.zeros((N_SPECIES, N_BINS + 1, N), dtype=np.float64)
@@ -2953,6 +3007,7 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
             print("  ISORROPIA LUT (reusing closure LUT)")
 
         iso_pm25_orbit = np.zeros((N_BINS, nz, ny, nx), dtype=np.float64)
+        iso_pm25_rh35_orbit = np.zeros((N_BINS, nz, ny, nx), dtype=np.float64)
         iso_f_nh4_orbit = np.zeros((N_BINS, nz, ny, nx), dtype=np.float64)
         iso_f_no3_orbit = np.zeros((N_BINS, nz, ny, nx), dtype=np.float64)
         for tau in range(N_BINS):
@@ -2961,6 +3016,11 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
                 c_SN_iso[s * N:(s + 1) * N] = orbits[s][tau + 1]
             pm25_iso, diag = extract_pm25_isorropia(c_SN_iso, grids[tau], indexer, lut)
             iso_pm25_orbit[tau] = pm25_iso
+            _c_pm  = np.maximum(c_SN_iso[IDX_PM25 * N:(IDX_PM25 + 1) * N], 0)
+            _c_poa = np.maximum(c_SN_iso[IDX_POA * N:(IDX_POA + 1) * N], 0)
+            _c_soa = _soa_3d_flat(lambda s: np.maximum(c_SN_iso[s * N:(s + 1) * N], 0), grids[tau], N)
+            iso_pm25_rh35_orbit[tau] = _pm25_at_rh35(
+                np.asarray(pm25_iso).ravel(), _c_pm, _c_poa, _c_soa).reshape((nz, ny, nx))
             iso_f_nh4_orbit[tau] = diag["f_nh4"]
             iso_f_no3_orbit[tau] = diag["f_no3"]
 
@@ -2983,8 +3043,10 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
                 m_any = m_no3 | m_nh4
                 if m_any.any():
                     iso_pm25_orbit[tau][m_any] = pm25_orbit[tau][m_any]
+                    iso_pm25_rh35_orbit[tau][m_any] = pm25_rh35_orbit[tau][m_any]
 
         iso_pm25_mean = iso_pm25_orbit.mean(axis=0)
+        iso_pm25_rh35_mean = iso_pm25_rh35_orbit.mean(axis=0)
         iso_f_nh4_mean = iso_f_nh4_orbit.mean(axis=0)
         iso_f_no3_mean = iso_f_no3_orbit.mean(axis=0)
 
@@ -3032,6 +3094,7 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
         iso_extras = {
             "iso_pm25_orbit": iso_pm25_orbit,
             "iso_pm25_mean": iso_pm25_mean,
+            "iso_pm25_rh35_mean": iso_pm25_rh35_mean,
             "iso_f_nh4_mean": iso_f_nh4_mean,
             "iso_f_no3_mean": iso_f_no3_mean,
             "gc_f_nh4_mean": gc_f_nh4_mean,
@@ -3054,8 +3117,13 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
         c_orbit=c_orbit,                       # (N_SPECIES, 9, N)
         orbit_species_order=np.arange(N_SPECIES),
         iter=np.array(last_iter_completed if chemistry_iters > 0 else 0),
+        # `converged`: the chemistry-iteration gate when --chemistry-iters
+        # is on, otherwise the inorganic (ISORROPIA) closure gate; False if
+        # neither closure ran. `iso_closure_converged` below always holds the
+        # inorganic gate on its own.
         converged=np.array(
-            history.converged(tol=closure_tol) if chemistry_iters > 0 else False,
+            history.converged(tol=closure_tol) if chemistry_iters > 0
+            else bool(iso_closure_converged),
             dtype=bool,
         ),
         closure_mode=np.array(closure_mode),
@@ -3063,7 +3131,9 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
         closure_tol=np.array(closure_tol),
         pm25_orbit=pm25_orbit,                  # (8, nz, ny, nx)
         c_mean=c_mean,                          # (N_SPECIES, N)
-        pm25_mean=pm25_mean,                    # (nz, ny, nx)
+        pm25_mean=pm25_mean,                    # (nz, ny, nx) dry compound mass
+        pm25_rh35_orbit=pm25_rh35_orbit,        # (8, nz, ny, nx) GEOS-Chem 35% RH convention
+        pm25_rh35_mean=pm25_rh35_mean,          # (nz, ny, nx)
         gmres_iters=result["gmres_iters"],
         gmres_resid=result["gmres_resid"],
         periodicity=result["periodicity"],
@@ -3114,6 +3184,9 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
         save_dict["pm25_mean_baseline"] = pm25_mean_baseline
     if iso_closure_history:
         save_dict["iso_closure_iters_run"] = np.array(len(iso_closure_history))
+        save_dict["iso_closure_converged"] = np.array(
+            bool(iso_closure_converged), dtype=bool)
+        save_dict["iso_closure_max_iters"] = np.array(isorropia_closure_iters)
         save_dict["iso_closure_fno3_surf_mean"] = np.array(
             [h[1] for h in iso_closure_history], dtype=np.float64)
         save_dict["iso_closure_pno3_p90"] = np.array(
@@ -3210,26 +3283,18 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
         save_dict["f_no3_eq_3d"] = f_no3_eq_3d
         save_dict["f_no3_marg_3d"] = f_no3_marg_3d
 
-        # Phase 6a-rev: full ISORROPIA Jacobian block + asymmetry
-        # diagnostics. Default-on per the iso-coupled-marginal addendum;
-        # iso-coupled marginal mode (Phase 6c) requires the cross-
-        # partials. Asymmetry fields feed the tipping-points follow-up
-        # paper (cells with |f(+δ) + f(-δ) - 2·f(0)| substantial sit
-        # near regime thresholds).
+        # Full ISORROPIA Jacobian block. Default-on; iso-coupled marginal
+        # mode requires the cross-partials. (The per-cell "regime
+        # proximity" asymmetry diagnostic that used to be saved here was
+        # removed in 1.0.3: with linear table interpolation it measured
+        # lookup-table node crossings, not regime boundaries.)
         if "final_iso" in locals():
             cross_keys = ("f_nh_dno3", "f_no3_dnh", "f_nh_dso4", "f_no3_dso4")
-            asym_keys = ("f_nh_marg_asym", "f_no3_marg_asym")
             if iso_cross_partials and all(k in final_iso.get(0, {}) for k in cross_keys):
                 for k in cross_keys:
                     save_dict[k + "_3d"] = np.stack(
                         [final_iso[tau][k] for tau in range(N_BINS)], axis=0,
                     ).astype(np.float32)
-            if all(k in final_iso.get(0, {}) for k in asym_keys):
-                for k in asym_keys:
-                    save_dict[k + "_3d"] = np.stack(
-                        [final_iso[tau][k] for tau in range(N_BINS)], axis=0,
-                    ).astype(np.float32)
-
     # Deposition flux maps. Deposition is a diagonal sink, so the deposited
     # flux is recoverable exactly from the converged orbit -- no extra solve.
     # Orbit-mean, ug/m2/s; inorganics in element mass (N, S). See
@@ -3693,10 +3758,10 @@ def main():
                              "otherwise). Set to 'none' to run without the "
                              "ISORROPIA closure.")
     parser.add_argument("--chemistry-iters", type=int, default=0,
-                        help="Number of DCOMP OH/oxidant outer iterations. "
+                        help="Number of OH/oxidant chemistry-closure outer iterations. "
                              "0 (default) = prescribed OH/NO/NO2 (no "
                              "diagnostic-oxidant loop; O3/CO inert). N>=1 "
-                             "engages DCOMP, which requires the TUV photolysis "
+                             "engages the chemistry closure, which requires the TUV photolysis "
                              "LUT and HEMCO climatology (not included in this "
                              "release); if either is missing the run falls "
                              "back to 0. ISORROPIA partitioning closure is "
@@ -3708,8 +3773,10 @@ def main():
                              "90th percentile of the relative change in "
                              "particulate nitrate and in particulate ammonium "
                              "(each with a 0.5 µg/m³ floor) both fall below "
-                             "--closure-tol. 6 iters covers "
-                             "Picard@α=0.5 with margin; Anderson typically halves "
+                             "--closure-tol. Default 6; July to December reach "
+                             "it with the gate not met in ocean cells, which "
+                             "iso_closure_converged and a run-record warning "
+                             "report. Anderson typically halves "
                              "this. Set to 0 to disable the closure entirely "
                              "(no-ISORROPIA ablation baseline).")
     parser.add_argument("--fold-meander-in-K", action="store_true",
@@ -3760,7 +3827,7 @@ def main():
                              "basin_flip_* arrays to NPZ for diagnostic "
                              "post-hoc analysis.")
     parser.add_argument("--photolysis-lut", type=str,
-                        default="/path/to/data/preproc/output/LUT/photolysis_tuv_dcomp.npz",
+                        default="/path/to/data/preproc/output/LUT/photolysis_tuv_closure.npz",
                         help="Path to a TUV photolysis LUT (jNO2, jO1D, jNO3, "
                              "jHONO, jHCHO, jH2O2). Only used when "
                              "--chemistry-iters > 0; the LUT is not included "
@@ -3932,9 +3999,8 @@ def main():
                         help="(forward) Compute and persist the full "
                              "ISORROPIA Jacobian block (4 cross-couplings: "
                              "f_nh_dno3, f_no3_dnh, f_nh_dso4, f_no3_dso4) "
-                             "plus per-cell asymmetry diagnostics "
-                             "(f_*_marg_asym) at the closure-converged "
-                             "baseline, via symmetric ±δ finite differences. "
+                             "at the closure-converged baseline, via "
+                             "symmetric ±δ finite differences. "
                              "Required by iso-coupled marginal mode. Adds "
                              "~10-20%% wall to forward. Default ON; pass "
                              "--no-iso-cross-partials to disable.")

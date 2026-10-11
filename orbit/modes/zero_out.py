@@ -129,8 +129,12 @@ def run_zero_out_month(
             f"Preproc grid shape ({nz},{ny},{nx}) != baseline grid_shape {grid_shape}"
         )
     indexer = CellIndexer(nz, ny, nx)
+    # All 8 bin grids: elevated sources take their plume rise from each
+    # bin's meteorology, as the forward does (1.0.3).
+    grids_all = [grid0] + [load_grid(preproc_path_fn(month, tau + 1), constants_path)
+                           for tau in range(1, N_BINS)]
     e_perturbed = build_perturbed_emissions(
-        perturbation, baseline_sources, grid0, indexer,
+        perturbation, baseline_sources, grids_all, indexer,
         month=month, n_bins=N_BINS, diurnal_cfg=diurnal_cfg,
         verbose=verbose,
     )
@@ -204,6 +208,13 @@ def run_zero_out_month(
     delta_c_orbit = c_full_orbit - c_pert_orbit
     delta_pm25_orbit = pm25_full_orbit - pm25_pert_orbit
     delta_pm25_mean = pm25_full_mean - pm25_pert_mean
+    # 35 % RH field (1.0.3 health-chain mass) when both runs carry it.
+    delta_pm25_rh35_orbit = delta_pm25_rh35_mean = None
+    if "iso_pm25_rh35_orbit" in baseline.files and "iso_pm25_rh35_orbit" in perturbed.files:
+        delta_pm25_rh35_orbit = (np.asarray(baseline["iso_pm25_rh35_orbit"], dtype=np.float64)
+                                 - np.asarray(perturbed["iso_pm25_rh35_orbit"], dtype=np.float64))
+        delta_pm25_rh35_mean = (np.asarray(baseline["iso_pm25_rh35_mean"], dtype=np.float64)
+                                - np.asarray(perturbed["iso_pm25_rh35_mean"], dtype=np.float64))
 
     # Regime-shift diagnostic.
     delta_f_no3_eq = None
@@ -234,6 +245,8 @@ def run_zero_out_month(
         "delta_c_orbit": delta_c_orbit.astype(np.float64),
         "delta_pm25_orbit": delta_pm25_orbit.astype(np.float64),
         "delta_pm25_mean": delta_pm25_mean.astype(np.float64),
+        **({"delta_pm25_rh35_orbit": delta_pm25_rh35_orbit, "delta_pm25_rh35_mean": delta_pm25_rh35_mean}
+           if delta_pm25_rh35_orbit is not None else {}),
         "orbit_species_order": np.arange(N_SPECIES),
         "lon": baseline["lon"],
         "lat": baseline["lat"],

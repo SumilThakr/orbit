@@ -8,7 +8,7 @@ specific algorithm issues rather than system-level problems.
 import numpy as np
 import pytest
 
-from orbit.core.dcomp_iter import AndersonAccelerator
+from orbit.core.closure_iteration import AndersonAccelerator
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +149,7 @@ def _make_dummy_chem(nz, ny, nx, N_BINS):
     """Build a minimal ChemistryPerBin for splice tests.  All 11 required
     OxidantFields entries are zeros of the right shape; only OH is
     inspected by these tests."""
-    from orbit.core.dcomp import ChemistryPerBin
+    from orbit.core.chemistry_closure import ChemistryPerBin
     from orbit.core.oxidants import OxidantFields
 
     def zero3(): return np.zeros((nz, ny, nx))
@@ -177,7 +177,7 @@ def _make_dummy_chem(nz, ny, nx, N_BINS):
 def test_splice_oh_into_chem_roundtrip():
     """splice_oh_into_chem writes a flat (N_BINS * N) OH vector back
     into chem.oxidants[tau].OH for each bin."""
-    from orbit.core.dcomp import splice_oh_into_chem
+    from orbit.core.chemistry_closure import splice_oh_into_chem
 
     nz, ny, nx = 2, 3, 4
     N = nz * ny * nx
@@ -199,7 +199,7 @@ def test_splice_oh_into_chem_roundtrip():
 
 
 def test_splice_oh_into_chem_size_mismatch_raises():
-    from orbit.core.dcomp import splice_oh_into_chem
+    from orbit.core.chemistry_closure import splice_oh_into_chem
     chem = _make_dummy_chem(2, 3, 4, 8)
     with pytest.raises(ValueError, match="expected"):
         splice_oh_into_chem(chem, np.zeros(10), 2, 3, 4)

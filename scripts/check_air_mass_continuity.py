@@ -17,7 +17,8 @@ diffusion, CMFMC convection) on every diurnal bin and reports three things.
 3. The implied air density rho = dP / (g Dz): its range at the surface, the
    ratio of surface density to each layer's density, and the surface density
    at a few sites relative to Delhi. These bound the effect of reading the
-   transported variable as a concentration at local density.
+   transported variable as a concentration at local density (see
+   docs/notes/air_mass_continuity_and_units.md).
 
 Usage:
     python scripts/check_air_mass_continuity.py \

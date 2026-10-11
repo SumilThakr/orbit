@@ -41,7 +41,9 @@ def main() -> int:
     if a.emissions_manifest:
         os.environ["ORBIT_EMISSION_MANIFEST"] = a.emissions_manifest
 
-    from orbit.emissions.loader import DiurnalConfig, _local_to_utc_bin_factors
+    from orbit.emissions.loader import (
+        DiurnalConfig, DynamicProfile, _local_to_utc_bin_factors,
+    )
     from orbit import cli
 
     cfg = DiurnalConfig.from_yaml(a.diurnal_config)
@@ -60,10 +62,15 @@ def main() -> int:
     unmapped = []
     for (basename, name) in resolved:
         prof = cfg.profile_for(basename, a.month)
-        factors = np.asarray(_local_to_utc_bin_factors(prof, ist, n_bins))
-        fac = " ".join(f"{v:5.2f}" for v in factors)
-        lo = factors.min()
-        spread = f"x{factors.max() / lo:.1f}" if lo > 1e-6 else "x inf"
+        if isinstance(prof, DynamicProfile):
+            # Computed per cell and bin from the bin meteorology at run time.
+            fac = f"[{prof.kind}: per-cell factors from the bin grids]"
+            spread = ""
+        else:
+            factors = np.asarray(_local_to_utc_bin_factors(prof, ist, n_bins))
+            fac = " ".join(f"{v:5.2f}" for v in factors)
+            lo = factors.min()
+            spread = f"x{factors.max() / lo:.1f}" if lo > 1e-6 else "x inf"
         label = name or "*** BIN-FLAT (unmapped) ***"
         if name is None:
             unmapped.append(basename)

@@ -93,7 +93,7 @@ def calc_delta_h(
        deltaH = D * Vs^1.4 * windSpeedMinusOnePointFour
 
     2. Buoyancy-dominated:
-       F = g * tempDiff * Vs * (D/2)^2  (buoyancy flux)
+       F = g * Vs * (D/2)^2 * (Ts - Ta)/Ts  (Briggs buoyancy flux)
        - Stable (sClass > 0.5, s1 != 0, F > 0):
          deltaH = 2.6 * (F / (u * s))^(1/3),  s = g * s1
        - Unstable (F > 0):
@@ -153,7 +153,10 @@ def calc_delta_h(
     air_temp = temperature[stack_layer]
     wind_spd = wind_speed[stack_layer]
 
-    # Check for momentum-dominated regime
+    # Momentum-dominated regime (ASME 1973): cool, fast plumes only, with
+    # Ts - Ta < 50 K. The stacks in the shipped manifest exit at 380-410 K,
+    # so this branch never applies to them; it is kept for user manifests
+    # with cool stacks. The paper should not describe it as active.
     if ((stack_temp - air_temp) < 50.0 and
             stack_vel > wind_spd and stack_vel > 10.0):
         delta_h = (stack_diam *
@@ -169,10 +172,14 @@ def calc_delta_h(
 
     else:
         # Buoyancy-dominated
+        # Briggs buoyancy flux F = g V (D/2)^2 (Ts - Ta) / Ts (Briggs 1969,
+        # "Plume Rise", USAEC Critical Review Series). Through 1.0.2 the ratio was
+        # 2 (Ts - Ta) / (Ts + Ta), which overstates F by about 15% and the
+        # rise by about 5% for the 380-410 K stacks.
         if stack_temp - air_temp == 0:
             temp_diff = 0.0
         else:
-            temp_diff = 2 * (stack_temp - air_temp) / (stack_temp + air_temp)
+            temp_diff = (stack_temp - air_temp) / stack_temp
 
         F = g * temp_diff * stack_vel * math.pow(stack_diam / 2, 2)
 

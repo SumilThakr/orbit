@@ -31,7 +31,7 @@ class TestShippedManifest:
     def test_default_manifest_exists_and_parses(self):
         m = load_manifest()
         assert m.name == "sas_2022"
-        assert len(m.entries) == 30
+        assert len(m.entries) == 34        # 30 through 1.0.2 + 4 EDGAR non-carbonaceous tiers
 
     def test_ships_inside_the_package(self):
         """Must live under orbit/ so a pip install includes it."""
@@ -52,7 +52,7 @@ class TestShippedManifest:
     def test_stack_tiers_present(self):
         """Twelve elevated sources: pm25/so2/nox/poa x low/medium/high."""
         elevated = [e for e in load_manifest().entries if e.stack]
-        assert len(elevated) == 12
+        assert len(elevated) == 15         # 3 tiers x (POA, other primary, EDGAR, SO2, NOx)
         heights = sorted({e.stack["height"] for e in elevated})
         assert heights == [30.0, 50.0, 220.0]
 

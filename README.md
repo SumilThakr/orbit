@@ -211,7 +211,7 @@ aggregation), `figures` (cartopy, for the map figures), and `dev`
 ORBIT reads pre-built meteorology/chemistry input grids plus an emissions
 directory. The South Asia 2022 inputs are archived separately:
 
-> **Data:** [Zenodo archive.](https://zenodo.org/records/23064136)
+> **Data:** [Google Drive archive](https://drive.google.com/drive/folders/1o5a3RWS9suuazPKqmJuqg-1DrExCO6PE?usp=sharing) (a Zenodo DOI will follow)
 
 The archive contains the input grids, the MERRA-2 constants file, the
 emissions directory, the ISORROPIA lookup table, and the twelve production
@@ -664,7 +664,7 @@ Commonly adjusted flags:
 | `--list-sources` | off | print the resolved inventory and exit |
 | `--isorropia-anderson` | on | Anderson-accelerated inorganic closure (`--no-isorropia-anderson` for plain Picard) |
 | `--horizontal-fct` | on (forward, zero-out); off (marginal) | flux-corrected horizontal transport; marginal defaults to the monotone low-order linearisation (`--horizontal-fct` / `--no-horizontal-fct` overrides) |
-| `--isorropia-closure-iters N` | 6 | outer closure iterations |
+| `--isorropia-closure-iters N` | 12 | outer closure iterations |
 | `--closure-mode {full,chem-only}` | `full` | what the outer loop refreshes |
 | `--closure-alpha`, `--closure-tol` | 0.5, 0.02 | closure damping and convergence gate (2% on particulate NO3/NH4) |
 | `--chemistry-iters N` | 0 | diagnostic-OH path (> 0 not currently in production) |

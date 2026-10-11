@@ -114,6 +114,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--krylov-tol", type=float, default=1e-6)
     ap.add_argument("--maxiter", type=int, default=200)
+    ap.add_argument("--pm25-rh35", action="store_true",
+                    help="Receptor on the GEOS-Chem 35 %% RH PM2.5 mass. Use "
+                         "when the deaths gradient was linearised on "
+                         "pm25_rh35_mean (ORBIT 1.0.3 production).")
     ap.add_argument("--horizontal-fct", action="store_true",
                     help="Add the frozen-coefficient FCT anti-diffusive operator "
                          "L_AD (van Leer φ + Zalesak C frozen at the baseline "
@@ -155,6 +159,7 @@ def main(argv: list[str] | None = None) -> int:
             krylov_tol=args.krylov_tol,
             maxiter=args.maxiter,
             horizontal_fct=args.horizontal_fct,
+            pm25_rh35=args.pm25_rh35,
         )
 
     return 0

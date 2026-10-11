@@ -826,7 +826,7 @@ class TestIsoCrossPartials:
     def test_cross_partials_match_analytic(self):
         """f_*_d* match the analytic chain-rule values within FD slack."""
         import numpy as np
-        from orbit.core.dcomp_isorropia import partitioning_per_bin
+        from orbit.core.isorropia_closure import partitioning_per_bin
         from orbit.core.deposition import IDX_TOTAL_NH, IDX_TOTAL_NO3, IDX_PSO4
 
         grids = self._make_grids()
@@ -867,7 +867,7 @@ class TestIsoCrossPartials:
         """Phase 6a-rev: include_cross_partials defaults to True per
         the iso-coupled-marginal addendum."""
         import numpy as np
-        from orbit.core.dcomp_isorropia import partitioning_per_bin
+        from orbit.core.isorropia_closure import partitioning_per_bin
         from orbit.core.deposition import IDX_TOTAL_NH, IDX_TOTAL_NO3, IDX_PSO4
 
         grids = self._make_grids()
@@ -884,15 +884,14 @@ class TestIsoCrossPartials:
             assert k in bin0, f"{k} missing — default-on regression"
         for k in ("f_nh_eq", "f_nh_marg", "f_no3_eq", "f_no3_marg"):
             assert k in bin0
-        # Asymmetry diagnostics always present.
-        for k in ("f_nh_marg_asym", "f_no3_marg_asym"):
-            assert k in bin0
+        # The regime-proximity asymmetry diagnostic was removed in 1.0.3.
+        assert "f_nh_marg_asym" not in bin0 and "f_no3_marg_asym" not in bin0
 
     def test_cross_partials_opt_out(self):
         """include_cross_partials=False disables the cross probes (and
         the SO4 ±δ pair) without hiding the asymmetry diagnostics."""
         import numpy as np
-        from orbit.core.dcomp_isorropia import partitioning_per_bin
+        from orbit.core.isorropia_closure import partitioning_per_bin
         from orbit.core.deposition import IDX_TOTAL_NH, IDX_TOTAL_NO3, IDX_PSO4
 
         grids = self._make_grids()
@@ -1034,7 +1033,7 @@ class TestIsoCrossPartials:
         (b ≠ 0). The clipped cross-derivative should be 0 because the
         clip pins f_marg at 0 throughout."""
         import numpy as np
-        from orbit.core.dcomp_isorropia import partitioning_per_bin
+        from orbit.core.isorropia_closure import partitioning_per_bin
         from orbit.core.deposition import IDX_TOTAL_NH, IDX_TOTAL_NO3, IDX_PSO4
 
         # f_nh4 = -0.5 * NH + (-0.05) * NO3 + (-0.10) * SO4 + 0.0
@@ -1093,7 +1092,7 @@ class TestIsoCrossPartials:
         addendum. With a linear LUT the +δ and -δ branches give identical
         derivatives, so the asymmetry diagnostic must be ~0."""
         import numpy as np
-        from orbit.core.dcomp_isorropia import partitioning_per_bin
+        from orbit.core.isorropia_closure import partitioning_per_bin
         from orbit.core.deposition import IDX_TOTAL_NH, IDX_TOTAL_NO3, IDX_PSO4
 
         grids = self._make_grids()
@@ -1104,14 +1103,8 @@ class TestIsoCrossPartials:
             IDX_PSO4: np.full(N, 0.5),
         })
         out = partitioning_per_bin(grids, orbits, self._LinearLUT())
-        # Linear LUT: f(x+δ) + f(x-δ) - 2 f(x) = 0 exactly. The
-        # asymmetry diagnostic should be at floating-point noise level.
-        np.testing.assert_array_less(
-            np.abs(out[0]["f_nh_marg_asym"]).max(), 1e-10,
-        )
-        np.testing.assert_array_less(
-            np.abs(out[0]["f_no3_marg_asym"]).max(), 1e-10,
-        )
+        # Linear LUT: the marginal fractions equal the slope exactly.
+        assert "f_nh_marg" in out[0] and "f_no3_marg" in out[0]
 
 
 class TestPicardCyclicDAG:
@@ -1377,7 +1370,7 @@ class TestEndBinKeysConvention:
 
     Iso K-blocks are the linearisation of an implicit operator
     coefficient: their c_baseline factor is built at end-of-bin τ
-    (dcomp_isorropia._concentration_for_bin reads orbits[idx][tau+1]),
+    (isorropia_closure._concentration_for_bin reads orbits[idx][tau+1]),
     so the corresponding δc_other forcing must also read end-of-bin to
     keep time-levels matched. Chemistry-DAG K-blocks (mass-production
     rates) stay at start-of-bin.

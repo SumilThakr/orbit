@@ -42,10 +42,12 @@ import numpy as np
 from orbit.core.indexing import CellIndexer
 from orbit.core.orbit import N_BINS
 from orbit.core.deposition import N_SPECIES
-from orbit.emissions.loader import load_emissions_diurnal, DiurnalConfig
+from orbit.emissions.loader import (
+    load_emissions_diurnal, DiurnalConfig, as_bin_grids,
+)
 from orbit.emissions.sources import EmissionSource, N_ORBIT_SPECIES
 from orbit.emissions.vbs_distribution import (
-    compute_nox_regime, distribute_voc_to_vbs_bins,
+    compute_nox_regime_per_bin, distribute_voc_to_vbs_bins,
 )
 
 
@@ -225,7 +227,9 @@ def _route_voc_to_vbs(out_13, perturbation, baseline_sources, grid, indexer,
     baseline source: ``factor - 1`` for δe (marginal), ``factor`` for the full
     perturbed vector (zero-out). ``add_sources`` always enter at +1.
     """
-    F_high_nox = compute_nox_regime(grid)
+    grids = as_bin_grids(grid, n_bins)
+    grid = grids[0]
+    F_high_nox = compute_nox_regime_per_bin(grids)    # (n_bins, ny, nx)
     for source in baseline_sources:
         if source.voc_parent_class is None:
             continue
@@ -268,13 +272,18 @@ def _add_ivoc_synthesis(out_13, perturbation, baseline_sources, grid, indexer,
     perturbed vector. add_sources always enter at +1.
     """
     from orbit.cli import _IVOC_SCALING
-    from orbit.emissions.loader import _factors_for_source
+    from orbit.emissions.loader import (
+        _factors_for_source, _source_needs_bin_met, as_bin_grids,
+        scale_by_bin_factor,
+    )
     from orbit.emissions.netcdf import load_netcdf_source
     from orbit.emissions.vbs_distribution import bin_indices_in_solver_layout
-    from orbit.emissions.vbs_yields import VBS_PARENT_YIELDS
+    from orbit.emissions.vbs_yields import regime_yields
 
     N = indexer.N
-    ivoc_yields = VBS_PARENT_YIELDS["ivoc"]
+    _grids_f = as_bin_grids(grid, n_bins)
+    ivoc_yields_per_bin = regime_yields(
+        "ivoc", compute_nox_regime_per_bin(_grids_f))   # (n_bins, 5, ny, nx)
     bin_solver_idx = bin_indices_in_solver_layout()
 
     def _select(sources):
@@ -301,17 +310,24 @@ def _add_ivoc_synthesis(out_13, perturbation, baseline_sources, grid, indexer,
                 mult = 1.0
             if abs(mult) < 1e-15:
                 continue
-            monthly = load_netcdf_source(source, grid, verbose=False)
-            ivoc_emis_3d = frac * monthly[slot]
+            grids = as_bin_grids(grid, n_bins)
+            per_bin = _source_needs_bin_met(source) and any(
+                g is not grids[0] for g in grids)
+            monthly_per_bin = (
+                [load_netcdf_source(source, g, verbose=False) for g in grids]
+                if per_bin else
+                [load_netcdf_source(source, grids[0], verbose=False)] * n_bins)
             if diurnal_cfg is None:
                 factors = np.ones(n_bins)
             else:
-                factors = _factors_for_source(source, diurnal_cfg, month, n_bins)
+                factors = _factors_for_source(source, diurnal_cfg, month,
+                                              n_bins, grids)
             for tau in range(n_bins):
-                voc_mass_3d = mult * factors[tau] * ivoc_emis_3d
+                ivoc_emis_3d = frac * monthly_per_bin[tau][slot]
+                voc_mass_3d = mult * scale_by_bin_factor(factors[tau], ivoc_emis_3d)
                 for i_bin, solver_s in enumerate(bin_solver_idx):
                     out_13[tau, solver_s * N:(solver_s + 1) * N] += (
-                        ivoc_yields[i_bin] * voc_mass_3d).ravel()
+                        ivoc_yields_per_bin[tau, i_bin][None] * voc_mass_3d).ravel()
             if verbose:
                 print(f"  [IVOC] {os.path.basename(source.path)} "
                       f"x {frac:g} (mult {mult:+.3f})")
@@ -320,7 +336,7 @@ def _add_ivoc_synthesis(out_13, perturbation, baseline_sources, grid, indexer,
 def build_delta_emissions(
     perturbation: Perturbation,
     baseline_sources: List[EmissionSource],
-    grid,
+    grid,                 # one GridData, or the list of per-bin grids
     indexer: CellIndexer,
     month: int,
     n_bins: int = N_BINS,
@@ -382,7 +398,7 @@ def build_delta_emissions(
 def build_perturbed_emissions(
     perturbation: Perturbation,
     baseline_sources: List[EmissionSource],
-    grid,
+    grid,                 # one GridData, or the list of per-bin grids
     indexer: CellIndexer,
     month: int,
     n_bins: int = N_BINS,

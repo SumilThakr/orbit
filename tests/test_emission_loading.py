@@ -626,13 +626,13 @@ class TestASMEAlgorithm:
             wind_speed_minus_third=ws_m3,
             wind_speed_inverse=ws_inv,
         )
-        # Buoyancy: temp_diff = 2*(500-280)/(500+280) ≈ 0.564
-        # F = g * temp_diff * Vs * (D/2)^2 = 9.81 * 0.564 * 5.0 * 4.0 ≈ 110.7
-        # dh = 7.4 * (F * H^2)^(1/3) * ws_inv = 7.4 * (110.7 * 10000)^(1/3) * 0.2
+        # Buoyancy (Briggs): temp_diff = (500-280)/500 = 0.44
+        # F = g * temp_diff * Vs * (D/2)^2 = 9.81 * 0.44 * 5.0 * 4.0 ≈ 86.3
+        # dh = 7.4 * (F * H^2)^(1/3) * ws_inv = 7.4 * (86.3 * 10000)^(1/3) * 0.2
         assert dh > 0
         # Verify formula manually
         import math
-        temp_diff = 2 * (500 - 280) / (500 + 280)
+        temp_diff = (500 - 280) / 500
         F = 9.80665 * temp_diff * 5.0 * (4.0 / 2) ** 2
         expected = 7.4 * math.pow(F * 100.0**2, 1.0/3.0) * (1.0/5.0)
         assert abs(dh - expected) < 1e-6
@@ -659,7 +659,7 @@ class TestASMEAlgorithm:
         # since the grid's S1 is (dtheta/dz)/theta [1/m], not the
         # stability parameter [1/s^2].  See tests/test_plumerise_stable.py.
         import math
-        temp_diff = 2 * (500 - 280) / (500 + 280)
+        temp_diff = (500 - 280) / 500          # Briggs (Ts - Ta) / Ts
         F = 9.80665 * temp_diff * 5.0 * (4.0 / 2) ** 2
         expected = 2.6 * math.pow(F / (5.0 * 9.80665 * 0.02), 1.0 / 3.0)
         assert abs(dh - expected) < 1e-6

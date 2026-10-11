@@ -109,12 +109,13 @@ def _compute_voc_yields_per_bin(voc_class: str, grids, bio_voc_split=None):
     forward solver's VOC→VBS distribution
     (`orbit.emissions.vbs_distribution.distribute_voc_to_vbs_bins`),
     with NO2/OH-dependent NOx-regime interpolation for `VOC_anthro` and
-    a constant SAS monoterpene/isoprene split for `VOC_bio`.
+    a constant monoterpene/isoprene split for `VOC_bio`; every class takes
+    the NOx-regime interpolation (1.0.3).
     """
     from orbit.emissions.vbs_distribution import (
         compute_nox_regime, BIO_VOC_SPLIT,
     )
-    from orbit.emissions.vbs_yields import VBS_PARENT_YIELDS
+    from orbit.emissions.vbs_yields import regime_yields
     if bio_voc_split is None:
         bio_voc_split = BIO_VOC_SPLIT
     g0 = grids[0]
@@ -122,28 +123,16 @@ def _compute_voc_yields_per_bin(voc_class: str, grids, bio_voc_split=None):
 
     out_per_bin = []
     for g in grids:
+        F = compute_nox_regime(g)   # (ny, nx); every class is regime-dependent (1.0.3)
         if voc_class == "VOC_anthro":
-            F = compute_nox_regime(g)   # (ny, nx)
-            y_hi = VBS_PARENT_YIELDS["anthro_high_nox"]        # (5,)
-            y_lo = VBS_PARENT_YIELDS["anthro_low_nox"]
-            yields_eff = (
-                F[None, :, :] * y_hi[:, None, None]
-                + (1.0 - F[None, :, :]) * y_lo[:, None, None]
-            )  # (5, ny, nx)
+            yields_eff = regime_yields("anthro", F)                 # (5, ny, nx)
         elif voc_class == "VOC_bio":
-            y_mono = VBS_PARENT_YIELDS["bio_monoterpene"]
-            y_iso  = VBS_PARENT_YIELDS["bio_isoprene"]
-            f_mono = float(bio_voc_split.get("monoterpene", 0.15))
-            f_iso  = float(bio_voc_split.get("isoprene",    0.85))
-            y_combined = f_mono * y_mono + f_iso * y_iso       # (5,)
-            yields_eff = np.broadcast_to(
-                y_combined[:, None, None], (5, ny, nx)
-            ).copy()
+            f_mono = float(bio_voc_split.get("monoterpene", 0.14))
+            f_iso  = float(bio_voc_split.get("isoprene",    0.86))
+            yields_eff = (f_mono * regime_yields("bio_monoterpene", F)
+                          + f_iso * regime_yields("bio_isoprene", F))
         elif voc_class == "VOC_bb":
-            y_bb = VBS_PARENT_YIELDS["biomass_burning"]
-            yields_eff = np.broadcast_to(
-                y_bb[:, None, None], (5, ny, nx)
-            ).copy()
+            yields_eff = regime_yields("biomass_burning", F)
         else:
             raise ValueError(
                 f"Unknown VOC pseudo-species {voc_class!r}. "
@@ -230,6 +219,7 @@ def run_adjoint_month(
     horizontal_fct: bool = False,
     verbose: bool = True,
     output_filename: str | None = None,
+    pm25_rh35: bool = False,
 ) -> dict:
     """Solve the periodic-orbit adjoint for one month → ∂J/∂e per (bin, sp, cell).
 
@@ -583,6 +573,7 @@ def run_adjoint_month(
             S_surface_per_bin_d, grids, indexer, baseline_vbs_c,
             p_nh4_surface_per_bin=p_nh4_surface_per_bin,
             p_no3_surface_per_bin=p_no3_surface_per_bin,
+            pm25_rh35=pm25_rh35,
         )
 
         # ── Per-draw species solve, optionally with FCT deferred correction.
@@ -759,7 +750,7 @@ def run_adjoint_month(
             # ORBIT_ADJOINT_FCT_SOLVER selects gmres|anderson|picard (the
             # last two retained as diagnostics; Picard's residual ratios read
             # off K's dominant eigenvalue directly).
-            from orbit.core.dcomp_iter import AndersonAccelerator
+            from orbit.core.closure_iteration import AndersonAccelerator
             FCT_SOLVER = os.environ.get("ORBIT_ADJOINT_FCT_SOLVER", "gmres")
             FCT_MAX_ITERS = int(os.environ.get(
                 "ORBIT_ADJOINT_FCT_MAX_ITERS",
@@ -1036,6 +1027,9 @@ def run_adjoint_month(
             # from a converged one — and an unconverged one leaves small
             # negative ∂J/∂e for primary aerosol.
             horizontal_fct=int(bool(horizontal_fct)),
+            # 1 = receptor on the GEOS-Chem 35 % RH PM2.5 mass (deaths
+            # gradient linearised on pm25_rh35_mean); 0 = dry compound mass.
+            pm25_rh35=int(bool(pm25_rh35)),
             fct_deferred_iters=int(timings.get("fct_deferred_iters", 0)),
             fct_converged=int(bool(timings.get("fct_converged", True))),
             description=(

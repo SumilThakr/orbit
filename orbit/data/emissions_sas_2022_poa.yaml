@@ -18,7 +18,8 @@
 name: sas_2022
 description: >
   Published ORBIT South Asia 2022 baseline inventory. CEDS anthropogenic
-  (stack-height resolved for PM2.5/SO2/NOx), GFED5 biomass burning, CAMS
+  (stack-height resolved for PM2.5/SO2/NOx), EDGAR v8.1 non-carbonaceous
+  primary PM2.5, GFED5 biomass burning, CAMS
   biogenic VOC / oceanic DMS / soil NOx, GEIA natural NH3, Carn volcanic SO2,
   and MERRA-2 dust and sea salt.
 
@@ -62,6 +63,19 @@ sources:
   - file: ceds_poa_anthro_2022_monthly_high.nc
     stack: {height: 220, diameter: 6, temperature: 410, velocity: 20}
   - file: ceds_bcoth_anthro_2022_monthly_high.nc
+    stack: {height: 220, diameter: 6, temperature: 410, velocity: 20}
+  # EDGAR v8.1 non-carbonaceous anthropogenic primary PM2.5 (1.0.3): fly ash,
+  # process dust and other non-carbonaceous primary particles, formed as
+  # max(PM2.5 - BC - 1.8 OC, 0) by sector so it adds to the CEDS carbonaceous
+  # tiers without double counting (scripts/build_edgar_noncarb_emissions.py).
+  # Same four stack tiers as CEDS. Fugitive road and construction dust are
+  # in neither inventory.
+  - file: edgar_pm25_noncarb_anthro_2022_monthly_surface.nc
+  - file: edgar_pm25_noncarb_anthro_2022_monthly_low.nc
+    stack: {height: 30, diameter: 1.5, temperature: 380, velocity: 10}
+  - file: edgar_pm25_noncarb_anthro_2022_monthly_medium.nc
+    stack: {height: 50, diameter: 3, temperature: 380, velocity: 12}
+  - file: edgar_pm25_noncarb_anthro_2022_monthly_high.nc
     stack: {height: 220, diameter: 6, temperature: 410, velocity: 20}
   - file: gfed5_pm25_bb_2022_monthly.nc
   - file: merra2_dust_pm25_2022_monthly.nc

@@ -1,4 +1,4 @@
-"""HEMCO monthly climatology loader for DCOMP orbit chemistry.
+"""HEMCO monthly climatology loader for the ORBIT chemistry closure.
 
 Reads the 10-year GEOS-Chem v14.0.0 benchmark monthly-mean archive at
 4x5 resolution and regrids key fields to the ORBIT grid.
@@ -78,7 +78,7 @@ MW_AIR = 28.97
 SPECIES_KEYS = [
     "O3", "CO", "CH4", "OH", "NO", "NO2",
     "SO2", "HNO2", "NIT", "NH4", "SO4", "H2O2",
-    "CH2O",  # Formaldehyde — DCOMP noon HO2/OH source. 3h AS archive
+    "CH2O",  # Formaldehyde — noon HO2/OH source for the chemistry closure. 3h AS archive
              # lacks IJ_AVG_S__CH2O, so HCHO comes from the monthly mean;
              # jHCHO (TUV) remains bin-resolved.
 ]

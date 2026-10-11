@@ -49,7 +49,9 @@ _FINE_REFF_M   = 0.15e-6
 
 # JPL/IUPAC recommended N2O5 uptake coefficient on mixed sulfate-ammonium
 # nitrate aerosol, aqueous conditions. Real γ varies 0.005-0.05 with RH and
-# composition; a constant 0.02 is a conventional v1 choice.
+# composition (Bertram and Thornton 2009); the constant 0.02 is an ORBIT
+# choice, not a value taken from a single source. Composition-dependent
+# uptake is a 1.0.4 candidate.
 GAMMA_N2O5 = 0.02
 
 
