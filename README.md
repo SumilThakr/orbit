@@ -211,7 +211,7 @@ aggregation), `figures` (cartopy, for the map figures), and `dev`
 ORBIT reads pre-built meteorology/chemistry input grids plus an emissions
 directory. The South Asia 2022 inputs are archived separately:
 
-> **Data:** [Zenodo archive, doi:10.5281/zenodo.23064135](https://doi.org/10.5281/zenodo.23064135) (the concept DOI, which resolves to the latest version)
+> **Data:** [Zenodo archive, doi:10.5281/zenodo.23064135](https://doi.org/10.5281/zenodo.23064135)
 
 The archive contains the input grids, the MERRA-2 constants file, the
 emissions directory, the ISORROPIA lookup table, and the twelve production
@@ -224,7 +224,7 @@ these variables:
 
 | Variable | What it points at |
 |---|---|
-| `ORBIT_PREPROC_DIR` | directory of input grids, `sas_<year>_M<MM>_B<BB>.nc` (12 months × 8 bins; `sas` = the South Asia domain, fixed in this release) |
+| `ORBIT_PREPROC_DIR` | directory of input grids, `sas_<year>_M<MM>_B<BB>.nc` (12 months × 8 bins; `sas` = the South Asia domain) |
 | `ORBIT_PREPROC_YEAR_TAG` | year tag in those filenames (default `2022`) |
 | `ORBIT_CONSTANTS` | MERRA-2 constants file (land fraction) |
 | `ORBIT_EMISSION_DIR` | directory of per-source emission NetCDFs |
@@ -319,7 +319,7 @@ Useful for long runs:
 |---|---|
 | `--resume` | skip months that already have output; resume unfinished ones from their last checkpoint |
 | `--resume-from PATH` | resume explicitly from any NPZ this CLI produced |
-| `--warm` | warm-start GMRES from the previous month's orbit mean (fewer iterations; changes the iterate path, not the converged answer) |
+| `--warm` | warm-start GMRES from the previous month's orbit mean (fewer iterations; changes the iterate path but not the converged answer) |
 
 Each output NPZ carries the bin-resolved 3-D concentration field, the inorganic
 partitioning fractions, the VBS partitioning, the orbit-mean surface PM2.5,
@@ -682,9 +682,12 @@ input grids) and skip when it is absent.
 
 ## Citation
 
-ORBIT was developed by Dr. Sumil K. Thakrar (2026). Manuscript in
-preparation (TBD). Please email sumilthakrar@gmail.com for more
-information.
+ORBIT was developed by Dr. Sumil K. Thakrar (2026).
+Please cite:
+
+"Thakrar, Sumil. "ORBIT: A new, reduced-complexity air quality model for South Asia." (2026). EarthArXiv Preprint: [https://doi.org/10.31223/X5VF8P](https://doi.org/10.31223/X5VF8P)
+
+For more information, please email sumilthakrar@gmail.com.
 
 ## License
 
