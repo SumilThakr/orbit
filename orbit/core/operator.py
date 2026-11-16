@@ -14,7 +14,7 @@ import os
 import numpy as np
 import scipy.sparse as sp
 from orbit.core.indexing import CellIndexer
-from orbit.core.grid_data import GridData, EARTH_RADIUS, DEG_TO_RAD
+from orbit.core.grid_data import GridData, EARTH_RADIUS, DEG_TO_RAD, edge_face
 from orbit.core.advection import assemble_vertical_advection
 from orbit.core.mixing import assemble_vertical_diffusion
 from orbit.core.convdiff import assemble_horizontal_convdiff
@@ -103,14 +103,14 @@ def compute_lateral_boundary_loss(
         bnd_e[:, :, :-1] = False
         if use_split:
             up_bnd = np.zeros((nz, ny, nx), dtype=np.float64)
-            up_bnd[:, :, -1] = grid.UAvg_plus[:, :, -1]
+            up_bnd[:, :, -1] = edge_face(grid, "U_plus")
             bnd_e_loss = bnd_e & (up_bnd > 0)
             if np.any(bnd_e_loss):
                 safe_dx_bnd = np.where(dx_3d > 0, dx_3d, 1.0)
                 loss += np.where(bnd_e_loss, up_bnd / safe_dx_bnd, 0.0)
         elif nx > 1:
             ue_bnd = np.zeros((nz, ny, nx), dtype=np.float64)
-            ue_bnd[:, :, -1] = U[:, :, -1]
+            ue_bnd[:, :, -1] = edge_face(grid, "U")
             bnd_e_loss = bnd_e & (ue_bnd >= 0)
             if np.any(bnd_e_loss):
                 safe_dx_bnd = np.where(dx_3d > 0, dx_3d, 1.0)
@@ -154,14 +154,14 @@ def compute_lateral_boundary_loss(
     tr_bnd_n = dx_face_n / safe_dx_nend
     if use_split:
         vp_bnd = np.zeros((nz, ny, nx), dtype=np.float64)
-        vp_bnd[:, -1, :] = grid.VAvg_plus[:, -1, :]
+        vp_bnd[:, -1, :] = edge_face(grid, "V_plus")
         bnd_n_loss = bnd_n & (vp_bnd > 0)
         if np.any(bnd_n_loss):
             safe_dy_val = dy if dy > 0 else 1.0
             loss += np.where(bnd_n_loss, vp_bnd / safe_dy_val * tr_bnd_n, 0.0)
     elif ny > 1:
         vn_bnd = np.zeros((nz, ny, nx), dtype=np.float64)
-        vn_bnd[:, -1, :] = V[:, -1, :]
+        vn_bnd[:, -1, :] = edge_face(grid, "V")
         bnd_n_loss = bnd_n & (vn_bnd >= 0)
         if np.any(bnd_n_loss):
             safe_dy_val = dy if dy > 0 else 1.0
@@ -377,8 +377,14 @@ def assemble_species_operators(
     o3_loss_rate: np.ndarray = None,
     co_loss_rate: np.ndarray = None,
     return_D_per_species: bool = False,
+    partitioning: str = "marginal",
 ) -> tuple:
     """Assemble N_SPECIES independent single-species operators + chemistry couplings.
+
+    ``partitioning`` selects the ISORROPIA fraction that blends TotalNH and
+    TotalNO3 deposition: "equilibrium" for full solves (forward, zero-out,
+    perturbation), "marginal" (default) for the linearised marginal and
+    adjoint operators (see deposition.assemble_deposition).
 
     14-species inventory (see deposition.py for indices; the first nine are):
         0 SoA, 1 PrimaryPM25, 2 TotalNH, 3 SO2, 4 NOx,
@@ -441,7 +447,8 @@ def assemble_species_operators(
 
     if verbose:
         print("Assembling deposition blocks...")
-    D = [assemble_deposition(grid, indexer, s) for s in range(N_SPECIES)]
+    D = [assemble_deposition(grid, indexer, s, partitioning=partitioning)
+         for s in range(N_SPECIES)]
 
     if verbose:
         print("Assembling chemistry coupling...")

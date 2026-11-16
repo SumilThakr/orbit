@@ -2,6 +2,8 @@
 
 import warnings
 
+import os
+
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional
@@ -84,6 +86,15 @@ class GridData:
 
     # Periodic longitude boundary
     periodic_lon: bool = False
+    # True outer-face winds of the east (x = nx) and north (y = ny) domain edges, always kept from the staggered
+    # input by load_grid (1.0.4 item 18; through 1.0.3 the boundary terms used the edge cell's west/south face).
+    # Empty only on grids built in memory (tests). Read through edge_face().
+    U_face_e: np.ndarray = field(default_factory=lambda: np.array([]))        # (nz, ny)
+    U_plus_face_e: np.ndarray = field(default_factory=lambda: np.array([]))   # (nz, ny)
+    U_minus_face_e: np.ndarray = field(default_factory=lambda: np.array([]))  # (nz, ny)
+    V_face_n: np.ndarray = field(default_factory=lambda: np.array([]))        # (nz, nx)
+    V_plus_face_n: np.ndarray = field(default_factory=lambda: np.array([]))   # (nz, nx)
+    V_minus_face_n: np.ndarray = field(default_factory=lambda: np.array([]))  # (nz, nx)
     UAvg_wrap: np.ndarray = field(default_factory=lambda: np.array([]))       # (nz, ny) wrap face
     UAvg_plus_wrap: np.ndarray = field(default_factory=lambda: np.array([]))  # (nz, ny)
     UAvg_minus_wrap: np.ndarray = field(default_factory=lambda: np.array([]))  # (nz, ny)
@@ -228,6 +239,52 @@ _GRID_INPUT_VARS = frozenset([
 ])
 
 
+def _keep_edge_faces(g, raw):
+    """Store the east (x = nx) and north (y = ny) face winds of the staggered input arrays.
+
+    The input carries UAvg on xStagger (nx + 1) and VAvg on yStagger (ny + 1); load_grid keeps the first nx / ny
+    faces. Without these, the east/north boundary terms use the edge cell's west/south face (convdiff.py and
+    operator.compute_lateral_boundary_loss), which at the Beijing 1000 km north edge differs from the true face by
+    ~8-20 % (V) and ~25-34 % at the east edge (U-). Raises if the input is not staggered.
+    """
+    def last(name, axis, n):
+        a = np.asarray(raw[name], dtype=np.float64)
+        if a.shape[axis] != n + 1:
+            raise ValueError(f"the east/north boundary needs staggered {name} (size {n + 1} on axis {axis}); "
+                             f"got shape {a.shape}")
+        return np.take(a, n, axis=axis)
+    g.U_face_e = last("UAvg", 2, g.nx)
+    g.V_face_n = last("VAvg", 1, g.ny)
+    if "UAvg_plus" in raw:
+        g.U_plus_face_e = last("UAvg_plus", 2, g.nx)
+        g.U_minus_face_e = last("UAvg_minus", 2, g.nx)
+        g.V_plus_face_n = last("VAvg_plus", 1, g.ny)
+        g.V_minus_face_n = last("VAvg_minus", 1, g.ny)
+    else:
+        g.U_plus_face_e = np.maximum(g.U_face_e, 0.0)
+        g.U_minus_face_e = np.maximum(-g.U_face_e, 0.0)
+        g.V_plus_face_n = np.maximum(g.V_face_n, 0.0)
+        g.V_minus_face_n = np.maximum(-g.V_face_n, 0.0)
+
+
+def edge_face(g, which):
+    """Wind on the east or north outer face.
+
+    Grids from load_grid always carry the true outer face. A grid built in
+    memory without one (unit tests) gets the edge cell's west/south face, the
+    behaviour of every run through 1.0.3; load_grid never takes this branch.
+
+    which: 'U', 'U_plus', 'U_minus' (east face, shape (nz, ny)) or 'V', 'V_plus', 'V_minus' (north face, (nz, nx)).
+    """
+    true = {"U": g.U_face_e, "U_plus": g.U_plus_face_e, "U_minus": g.U_minus_face_e,
+            "V": g.V_face_n, "V_plus": g.V_plus_face_n, "V_minus": g.V_minus_face_n}[which]
+    if true.size:
+        return true
+    proxy = {"U": g.UAvg, "U_plus": g.UAvg_plus, "U_minus": g.UAvg_minus,
+             "V": g.VAvg, "V_plus": g.VAvg_plus, "V_minus": g.VAvg_minus}[which]
+    return proxy[:, :, -1] if which.startswith("U") else proxy[:, -1, :]
+
+
 def load_grid(preprocessor_path: str, constants_path: Optional[str] = None,
               read_all: bool = False) -> GridData:
     """Load preprocessor NetCDF and compute all derived geometry.
@@ -356,6 +413,15 @@ def load_grid(preprocessor_path: str, constants_path: Optional[str] = None,
         g.VAvg_plus = np.maximum(g.VAvg, 0.0)
         g.VAvg_minus = np.maximum(-g.VAvg, 0.0)
         g.has_split_fluxes = False
+
+    # True east/north outer-face winds (1.0.4 item 18; see the GridData fields).
+    # Before 1.0.4 this was opt-in (ORBIT_TRUE_EDGE_FACES=1);
+    # it is now always on and a grid file without the staggered faces is an
+    # error. Asking for the old stand-in (=0) is refused rather than ignored.
+    if os.environ.get("ORBIT_TRUE_EDGE_FACES", "1").strip() != "1":
+        raise ValueError("ORBIT_TRUE_EDGE_FACES=0 is no longer supported (1.0.4): "
+                         "the true east/north outer faces are always used.")
+    _keep_edge_faces(g, raw)
 
     # Periodic longitude detection and wrap-face extraction
     g.periodic_lon = (g.nx * g.dlon >= 359.5)

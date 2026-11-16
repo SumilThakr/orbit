@@ -9,15 +9,18 @@ Two flavours of each fraction are produced:
 
 - **Equilibrium** (``*PartitioningEq``): the direct LUT f at the current
   total.  Used for the mass-extraction step (PM2.5 = primary + SOA +
-  f_NH4·totalNH·MW + f_NO3·totalNO3·MW + ...).
+  f_NH4·totalNH·MW + f_NO3·totalNO3·MW + ...) and, from 1.0.4, for the
+  deposition operator of full solves (forward, zero-out, perturbation),
+  which remove the mass already present.
 - **Marginal** (``*Partitioning``): ``d(f·total) / d(total)`` evaluated
   at the current total by numerical differentiation.  Used for the
-  deposition operator: the loss rate of a marginal addition of
-  TotalNO3 or TotalNH is blended by this number.
+  deposition operator of the linearised marginal and adjoint solves: the
+  loss rate of a marginal addition of TotalNO3 or TotalNH is blended by
+  this number.  (Through 1.0.3 the forward solve used it too.)
 
-Both are populated on the ``GridData`` so the existing deposition code
-(``_get_no3_partitioning`` / ``_get_nh_partitioning``) picks them up
-without a signature change.
+Both are populated on the ``GridData``; the deposition code picks one with
+its ``partitioning`` argument (``_nh_partitioning`` /
+``_get_no3_partitioning``).
 """
 
 from __future__ import annotations

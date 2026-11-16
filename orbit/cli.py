@@ -30,8 +30,12 @@ Checkpoint policy:
 
 import argparse
 import os
-import resource
 import sys
+
+try:
+    import resource  # POSIX only; used for the peak-memory figure in the log
+except ImportError:  # Windows
+    resource = None
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -41,6 +45,7 @@ import numpy as np
 
 from orbit.core.grid_data import load_grid
 from orbit.core.indexing import CellIndexer
+from orbit.core import lateral_bc as _lateral_bc
 from orbit.core.operator import assemble_species_operators
 from orbit.core.solve import (
     umfpack_symbolic, umfpack_free_symbolic, _HAS_UMFPACK,
@@ -619,7 +624,25 @@ def _build_emission_sources(month, verbose=True):
     return sources
 
 
-_VERSION = "1.0.3"
+_VERSION = "1.0.4"
+
+
+def _closure_gate_percentiles(rel, land_mask):
+    """Closure gate statistics of a per-cell relative change rel (..., ny, nx).
+
+    Returns (p90, p50, p90_ocean, argmax_index): p90, p50 and the argmax over
+    land cells (land_mask True, broadcast over leading axes), p90_ocean over
+    the other cells (NaN when there are none). From 1.0.4 the closure gate is
+    the land p90.
+    """
+    m = np.broadcast_to(np.asarray(land_mask, dtype=bool), rel.shape)
+    if not m.any():
+        raise ValueError("closure gate: land mask has no land cells")
+    p90 = float(np.percentile(rel[m], 90))
+    p50 = float(np.percentile(rel[m], 50))
+    p90_ocean = float(np.percentile(rel[~m], 90)) if (~m).any() else float("nan")
+    idx = np.unravel_index(np.argmax(np.where(m, rel, -np.inf)), rel.shape)
+    return p90, p50, p90_ocean, idx
 
 
 def _record_configuration(args, months):
@@ -654,6 +677,10 @@ def _record_configuration(args, months):
                     if args.chemistry_iters == 0 else ""),
                  True, src("--chemistry-iters", args.chemistry_iters != 0))
     R.set_config("ISORROPIA LUT", os.path.basename(str(args.lut)), True, "--lut")
+    R.set_config("lateral boundary inflow",
+                 os.environ.get("ORBIT_LATERAL_BC") or "closed",
+                 True, "ORBIT_LATERAL_BC" if os.environ.get("ORBIT_LATERAL_BC")
+                 else "default")
     for label, env, default in (
         ("VBS k_age", "ORBIT_VBS_K_AGE", "4.0e-11"),
         ("VBS aging mass gain", "ORBIT_VBS_AGING_GAIN", "1.075"),
@@ -758,6 +785,8 @@ def _log_paths(month):
 
 
 def _peak_rss_mb():
+    if resource is None:
+        return 0.0
     ru = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     if sys.platform == "darwin":
         return ru / 1024 / 1024
@@ -1055,7 +1084,8 @@ def _assemble_and_solve(grids, indexer, emissions_SN, N,
                          cached_assembly=None,
                          rebuild_deposition_species=None,
                          return_assembly=False,
-                         fct_enabled=False):
+                         fct_enabled=False,
+                         lateral_bc_rhs=None):
     """Helper: assemble N_SPECIES per-bin operators (optionally with chemistry rates)
     then solve the periodic orbit.
 
@@ -1110,7 +1140,8 @@ def _assemble_and_solve(grids, indexer, emissions_SN, N,
                                                       [{}] * N_BINS))
         for tau in range(N_BINS):
             for s in rebuild_deposition_species:
-                D_new = _assdep_inner(grids[tau], indexer, s)
+                D_new = _assdep_inner(grids[tau], indexer, s,
+                                      partitioning="equilibrium")
                 D_per_bin[tau][s] = D_new
                 # L_s = T + D_s + (optional K_age_loss_s for VBS bins).
                 # NH/TotalNO3 don't have K_age, so the addition is a no-op.
@@ -1146,6 +1177,7 @@ def _assemble_and_solve(grids, indexer, emissions_SN, N,
                     nox_to_no3_rate=kn, so2_ox_rate=ks, o3_loss_rate=ko3,
                     co_loss_rate=kco,
                     return_D_per_species=True,
+                    partitioning="equilibrium",
                 )
                 D_per_bin.append(D_list)
                 K_age_loss_per_bin.append(K_age_loss)
@@ -1154,6 +1186,7 @@ def _assemble_and_solve(grids, indexer, emissions_SN, N,
                     grids[tau], indexer, verbose=False, scheme="exp",
                     nox_to_no3_rate=kn, so2_ox_rate=ks, o3_loss_rate=ko3,
                     co_loss_rate=kco,
+                    partitioning="equilibrium",
                 )
             L_species_per_bin.append(L_species)
             K_sources_per_bin.append(K_sources)
@@ -1165,6 +1198,11 @@ def _assemble_and_solve(grids, indexer, emissions_SN, N,
         extra_rhs = {
             IDX_O3: [np.asarray(s).ravel() for s in s_o3_source_per_bin]
         }
+
+    # Lateral boundary inflow (opt-in, orbit/core/lateral_bc.py):
+    # a solution-independent source r_in * c_bc in edge cells, constant across
+    # closure iterations, so the unchanged-species skip stays valid.
+    extra_rhs = _lateral_bc.merge_into(extra_rhs, lateral_bc_rhs, N_BINS)
 
     # Horizontal FCT (deferred correction): add the limited anti-diffusive
     # source d_AD = -div(C⊙A) to the orbit RHS for every transported species,
@@ -1181,10 +1219,16 @@ def _assemble_and_solve(grids, indexer, emissions_SN, N,
             if orbit_s is None:
                 continue
             d_list = []
+            # With lateral inflow the boundary concentration is FCT's
+            # ghost value beyond the edge (1.0.4 item 19); species without
+            # inflow (and closed boundaries) keep the first-order edge face.
+            c_bc_s = (getattr(lateral_bc_rhs, "c_bc", {}).get(s)
+                      if lateral_bc_rhs is not None else None)
             for tau in range(N_BINS):
                 c_tau = np.asarray(orbit_s[tau + 1], dtype=np.float64)  # end-of-bin
                 d_list.append(_fct.compute_horizontal_fct_source(
-                    grids[tau], indexer, c_tau, DTAU))
+                    grids[tau], indexer, c_tau, DTAU,
+                    c_ghost_flat=None if c_bc_s is None else c_bc_s[tau]))
             _fct_norm += float(np.linalg.norm(np.concatenate(d_list)))
             _fct_nspec += 1
             if s in extra_rhs:
@@ -2058,6 +2102,9 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
         # We also skip the plausibility check on resume (it's an iter-1
         # only check).
 
+    # Lateral boundary inflow source (None unless ORBIT_LATERAL_BC is set);
+    # loaded before the resume branch so resumed runs also get it.
+    lateral_bc_rhs = _lateral_bc.from_env(month, grids, SPECIES_NAMES, N_BINS)
     if resume_iter == 0:
         # 6. Baseline solve (iteration 0) — prescribed chemistry from grid.
         # Request the LU cache back so subsequent iterations can reuse
@@ -2096,6 +2143,7 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
             keep_lu_species=keep_across_iters,
             disable_night_nox=disable_night_nox,
             return_assembly=request_assembly,
+            lateral_bc_rhs=lateral_bc_rhs,
         )
         baseline_lu_cache = result.get("lu_cache", {})
         baseline_assembly = result.get("assembly", None)
@@ -2188,9 +2236,11 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
     # assumes 100% particle, which is internally inconsistent.
     # Methods note (paper, §"Equilibrium closure"): the LUT query inside
     # `update_grid_partitioning` writes BOTH `*Partitioning` (marginal,
-    # d(f·c)/dc — used by the deposition operator) and `*PartitioningEq`
-    # (equilibrium, f at current totals — used by mass extraction). the archive
-    # uses one quantity for both; ORBIT doesn't. See `isorropia_closure.py`
+    # d(f·c)/dc — used by the linearised marginal and adjoint operators) and
+    # `*PartitioningEq` (equilibrium, f at current totals — used by mass
+    # extraction and, from 1.0.4, by this forward solve's deposition
+    # operator, which removes the mass present; through 1.0.3 the forward
+    # deposition read the marginal fraction). See `isorropia_closure.py`
     # docstring for the derivation. ISORROPIA inputs use totalSO4 = pSO4
     # alone (SO2 is not in the equilibrium pool — verified bug fix kept).
     #
@@ -2211,14 +2261,25 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
     # oscillating coastal cell at the boundary of two LUT basins is a
     # fixed-point pathology and shouldn't gate the answer when 90% of
     # cells are converged — see the iso loop's `_gate_metrics` docstring.
+    # Since 1.0.4 the p90 is taken over land cells only (grid.is_land from
+    # the constants file; every cell when no land mask is loaded). Over the
+    # sea, ammonium near the 0.5 floor converges slowly (December 1.0.3:
+    # ocean p90 23 %, land 0.8 %) and held the gate above tolerance in most
+    # months although the land cells, where people live, had converged. The
+    # ocean p90 is still logged and saved (iso_closure_*_p90_ocean).
     FLOOR_PSPECIES_UGM3 = 0.5
-    iso_closure_history = []   # per-iter (mean_fno3, no3_p90, nh4_p90)
+    iso_closure_history = []   # per-iter (it, mean_fno3, no3_p90, nh4_p90) over land
+    iso_closure_ocean = []     # per-iter (no3_p90, nh4_p90) over ocean (NaN if none)
     # Did the inorganic closure meet its gate? None when the closure did not
     # run. Saved as `iso_closure_converged`, and it is what `converged` in the
     # output means when --chemistry-iters is 0 (the production setting).
     # Through 1.0.2 `converged` came from the chemistry-iteration history,
     # which never runs in production, so it read False for every month.
     iso_closure_converged = None
+    # Per-cell relative change of the last closure iteration, surface,
+    # (N_BINS, ny, nx) each, saved so the cells that hold the gate above its
+    # tolerance can be mapped (1.0.4 item 2).
+    iso_last_gate_rel = None
     iso_named_cell_state = {}
     iso_accel = None
     iso_basin_flip = None
@@ -2383,6 +2444,7 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
                 rebuild_deposition_species=iso_rebuild_dep,
                 keep_lu_species=set(),
                 fct_enabled=horizontal_fct,
+                lateral_bc_rhs=lateral_bc_rhs,
             )
             # Per-species mass-convergence metric. Computing AFTER the
             # resolve so it reflects the full closed-loop response of
@@ -2390,8 +2452,14 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
             new_pno3_surf, new_pnh4_surf = _pno3_pnh4_surf_per_bin(
                 result["orbits"], grids, N, nz, ny, nx,
             )
+            _land = np.asarray(grids[0].is_land)
+            gate_mask = (_land > 0 if _land.size == ny * nx
+                         else np.ones((ny, nx), dtype=bool))
+
             def _gate_metrics(new, prev, floor, lon, lat):
-                """Return (p90, p50, argmax_info) of |Δ|/max(|new|,|prev|,floor).
+                """Return (p90, p50, argmax_info, rel, p90_ocean) of
+                |Δ|/max(|new|,|prev|,floor); p90, p50 and argmax over land
+                cells (gate_mask), p90_ocean over the rest (NaN if none).
 
                 Using p90 (not p99) as the gate: a single oscillating
                 coastal cell at the boundary of two LUT basins (e.g. the
@@ -2405,22 +2473,24 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
                 """
                 denom = np.maximum(np.maximum(np.abs(new), np.abs(prev)), floor)
                 rel = np.abs(new - prev) / denom
-                p90 = float(np.percentile(rel, 90))
-                p50 = float(np.percentile(rel, 50))
-                idx = np.unravel_index(np.argmax(rel), rel.shape)
+                p90, p50, p90_ocean, idx = _closure_gate_percentiles(rel, gate_mask)
                 tau, j, i = idx
                 rel_max = float(rel[idx])
                 new_v = float(new[idx])
                 prev_v = float(prev[idx])
                 lon_v = float(lon[i]) if i < len(lon) else float("nan")
                 lat_v = float(lat[j]) if j < len(lat) else float("nan")
-                return p90, p50, (lat_v, lon_v, tau, new_v, prev_v, rel_max)
-            no3_p90, no3_p50, no3_arg = _gate_metrics(
+                return (p90, p50, (lat_v, lon_v, tau, new_v, prev_v, rel_max),
+                        rel, p90_ocean)
+            no3_p90, no3_p50, no3_arg, no3_rel, no3_p90_oc = _gate_metrics(
                 new_pno3_surf, prev_pno3_surf, FLOOR_PSPECIES_UGM3,
                 grids[0].lon, grids[0].lat)
-            nh4_p90, nh4_p50, nh4_arg = _gate_metrics(
+            nh4_p90, nh4_p50, nh4_arg, nh4_rel, nh4_p90_oc = _gate_metrics(
                 new_pnh4_surf, prev_pnh4_surf, FLOOR_PSPECIES_UGM3,
                 grids[0].lon, grids[0].lat)
+            print(f"    gate over {int(gate_mask.sum())} land cells; ocean "
+                  f"p90|ΔpNO3|={no3_p90_oc:.3e} p90|ΔpNH4|={nh4_p90_oc:.3e} "
+                  f"(not gated)")
             print(f"    pNO3 argmax: lat={no3_arg[0]:.1f}°, lon={no3_arg[1]:.1f}°, "
                   f"bin={no3_arg[2]+1}, prev={no3_arg[4]:.3f}, "
                   f"new={no3_arg[3]:.3f} µg/m³ "
@@ -2431,6 +2501,8 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
                   f"(rel={nh4_arg[5]:.3f}, p50={nh4_p50:.3e})")
             gate_metric = max(no3_p90, nh4_p90)
             iso_closure_history.append((iso_it, mean_fno3, no3_p90, nh4_p90))
+            iso_closure_ocean.append((no3_p90_oc, nh4_p90_oc))
+            iso_last_gate_rel = (no3_rel, nh4_rel)
 
             # VBS Pankow closure: piggyback on the iso outer iteration.
             # Reads orbit-mean concentrations from per-bin orbits, writes
@@ -2456,7 +2528,7 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
                   f"(VBS iters={vbs_diag['iters_run']})")
             if gate_metric < closure_tol and iso_it >= 2:
                 print(f"  [iso] converged at iter {iso_it} "
-                      f"(max(p90|ΔpNO3|, p90|ΔpNH4|)={gate_metric:.3e} "
+                      f"(max(p90|ΔpNO3|, p90|ΔpNH4|) over land={gate_metric:.3e} "
                       f"< {closure_tol})")
                 iso_closure_converged = True
                 break
@@ -2712,6 +2784,7 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
             return_lu_cache=True,
             keep_lu_species=unchanged_this_iter,
             fct_enabled=horizontal_fct,
+            lateral_bc_rhs=lateral_bc_rhs,
         )
         # Promote the fresh LU cache for the next iter.
         prev_cache = result.get("lu_cache", {})
@@ -3193,6 +3266,20 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
             [h[2] for h in iso_closure_history], dtype=np.float64)
         save_dict["iso_closure_pnh4_p90"] = np.array(
             [h[3] for h in iso_closure_history], dtype=np.float64)
+        # The two above are over land cells (the gate) since 1.0.4.
+        save_dict["iso_closure_gate_domain"] = np.array("land")
+        save_dict["iso_closure_pno3_p90_ocean"] = np.array(
+            [h[0] for h in iso_closure_ocean], dtype=np.float64)
+        save_dict["iso_closure_pnh4_p90_ocean"] = np.array(
+            [h[1] for h in iso_closure_ocean], dtype=np.float64)
+    if iso_last_gate_rel is not None:
+        # |new - prev| / max(|new|, |prev|, 0.5 ug/m3) of the last closure
+        # iteration at the surface, per bin: the quantity whose p90 is the
+        # gate. Diagnostic only.
+        save_dict["iso_closure_last_rel_pno3_surf"] = np.asarray(
+            iso_last_gate_rel[0], dtype=np.float32)
+        save_dict["iso_closure_last_rel_pnh4_surf"] = np.asarray(
+            iso_last_gate_rel[1], dtype=np.float32)
     if iso_basin_flip is not None:
         # Per-bin per-cell metadata. Cells where mask=False have NaN in
         # the frozen/basin arrays — savez_compressed handles this well.
@@ -3300,7 +3387,8 @@ def run_forward_month(month, resume=False, warm=False, lut_path=None,
     # Orbit-mean, ug/m2/s; inorganics in element mass (N, S). See
     # orbit/core/deposition_maps.py.
     try:
-        _dep = compute_deposition_maps(orbits, grids, indexer)
+        _dep = compute_deposition_maps(orbits, grids, indexer,
+                                       partitioning="equilibrium")
         save_dict["dep_dry_ug_m2_s"] = _dep["dry"]
         save_dict["dep_wet_ug_m2_s"] = _dep["wet"]
         save_dict["dep_total_ug_m2_s"] = _dep["total"]

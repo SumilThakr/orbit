@@ -98,7 +98,8 @@ VBS_AGING_PAIRS = (
 IDX_TOTAL_NO = None
 
 
-def assemble_deposition(grid: GridData, indexer: CellIndexer, species_idx: int) -> sp.csc_matrix:
+def assemble_deposition(grid: GridData, indexer: CellIndexer, species_idx: int,
+                        partitioning: str = "marginal") -> sp.csc_matrix:
     """Assemble deposition diagonal matrix for one merged species.
 
     Parameters
@@ -107,6 +108,13 @@ def assemble_deposition(grid: GridData, indexer: CellIndexer, species_idx: int) 
     indexer : CellIndexer
     species_idx : int
         One of IDX_SOA..IDX_TOTAL_NO
+    partitioning : {"marginal", "equilibrium"}
+        Which ISORROPIA particle fraction blends the gas and particle
+        deposition of TotalNH and TotalNO3. A full solve (forward, zero-out,
+        perturbation) removes the mass already present, so it needs the
+        equilibrium fraction f = p/(p+g); a linearised solve (marginal,
+        adjoint) needs the marginal fraction d(f c)/dc. See
+        `_nh_partitioning` (1.0.4 item 1).
 
     Returns
     -------
@@ -116,12 +124,12 @@ def assemble_deposition(grid: GridData, indexer: CellIndexer, species_idx: int) 
     N = indexer.N
 
     # Wet deposition rate (all levels) - vectorized
-    wd = _get_wet_dep_rate_3d(grid, species_idx)  # (nz, ny, nx)
+    wd = _get_wet_dep_rate_3d(grid, species_idx, partitioning)  # (nz, ny, nx)
     diag_3d = wd.copy()
 
     # Dry deposition (k=0 only)
     dz_surface = grid.Dz[0]  # (ny, nx)
-    vd = _get_dry_dep_velocity_2d(grid, species_idx)  # (ny, nx)
+    vd = _get_dry_dep_velocity_2d(grid, species_idx, partitioning)  # (ny, nx)
     safe_dz = np.where(dz_surface > 0, dz_surface, 1.0)
     diag_3d[0] += np.where(dz_surface > 0, vd / safe_dz, 0.0)
 
@@ -160,24 +168,55 @@ def _get_soa_photolysis_rate_3d(grid: GridData, species_idx: int) -> np.ndarray:
     return soa_photolysis_rate(j, F_p_i)
 
 
-def _get_no3_partitioning(grid: GridData) -> np.ndarray:
+_PARTITIONING_CHOICES = ("marginal", "equilibrium")
+
+
+def _check_partitioning(partitioning: str) -> None:
+    if partitioning not in _PARTITIONING_CHOICES:
+        raise ValueError(f"partitioning must be one of {_PARTITIONING_CHOICES}, "
+                         f"got {partitioning!r}")
+
+
+def _nh_partitioning(grid: GridData, partitioning: str = "marginal") -> np.ndarray:
+    """Particle fraction of TotalNH used to blend its deposition, (nz, ny, nx).
+
+    "marginal" reads NHPartitioning, d(f c)/dc from the closure: the loss of
+    a small addition, right for the linearised marginal and adjoint
+    operators. "equilibrium" reads NHPartitioningEq, f = p/(p+g): the loss
+    of the mass present, right for a full solve. Through 1.0.3 every mode
+    used the marginal fraction, which in the ammonia-rich winter IGP (f_eq
+    0.36 to 0.46, marginal 0.19 to 0.24) deposited about half the ammonium
+    as ammonia gas (1.0.4 item 1).
+
+    Before the closure's first pass NHPartitioningEq is empty and
+    NHPartitioning holds the preprocessor's fraction; both choices then read
+    that, as chemistry_closure does.
+    """
+    _check_partitioning(partitioning)
+    if (partitioning == "equilibrium"
+            and getattr(grid, "NHPartitioningEq", np.empty(0)).size > 0):
+        return grid.NHPartitioningEq
+    return grid.NHPartitioning
+
+
+def _get_no3_partitioning(grid: GridData, partitioning: str = "marginal") -> np.ndarray:
     """Return the partitioning field used for Total NO3 deposition blending.
 
-    Prefers the marginal NO3Partitioning (response-coefficient, correct for
-    operator assembly) when present, falling back to the equilibrium
-    NO3PartitioningEq. These are populated at runtime by the Phase 3d
-    outer iteration from ISORROPIA LUT queries on ORBIT's converged
-    TotalNO3 (not from the preprocessor — GC/HEMCO don't provide HNO3).
-
-    Until the outer iteration lands, both are empty and this returns zeros.
-    That corresponds to treating the TotalNO3 pool as all HNO3 for
-    deposition — the fast-dep bound (worst case for loss), which is a
-    conservative starting point but wrong for the final answer.
+    "marginal" prefers NO3Partitioning (the response coefficient, for the
+    linearised operators); "equilibrium" prefers NO3PartitioningEq (for a
+    full solve; see `_nh_partitioning`). Each falls back to the other when
+    its own field is empty. Both are populated at runtime by the ISORROPIA
+    closure from LUT queries on ORBIT's TotalNO3 (GC/HEMCO don't provide
+    HNO3). Before the closure has run both are empty and this returns
+    zeros, i.e. the TotalNO3 pool deposits as HNO3 (the fast-dep bound).
     """
-    if hasattr(grid, "NO3Partitioning") and grid.NO3Partitioning.size > 0:
-        return grid.NO3Partitioning
-    if hasattr(grid, "NO3PartitioningEq") and grid.NO3PartitioningEq.size > 0:
-        return grid.NO3PartitioningEq
+    _check_partitioning(partitioning)
+    marg = getattr(grid, "NO3Partitioning", np.empty(0))
+    eq = getattr(grid, "NO3PartitioningEq", np.empty(0))
+    order = (marg, eq) if partitioning == "marginal" else (eq, marg)
+    for f in order:
+        if f.size > 0:
+            return f
     return np.zeros((grid.nz, grid.ny, grid.nx))
 
 
@@ -221,7 +260,8 @@ def _get_o3_vd(grid: GridData) -> np.ndarray:
     return vd
 
 
-def _get_dry_dep_velocity_2d(grid: GridData, species_idx: int) -> np.ndarray:
+def _get_dry_dep_velocity_2d(grid: GridData, species_idx: int,
+                             partitioning: str = "marginal") -> np.ndarray:
     """Get effective dry deposition velocity array for surface cells. Returns (ny, nx)."""
     if species_idx in IDX_VBS_BINS:
         # VBS bin gas/particle partitioning per Pankow (1994). Uses the
@@ -248,7 +288,7 @@ def _get_dry_dep_velocity_2d(grid: GridData, species_idx: int) -> np.ndarray:
     elif species_idx in (IDX_PM25, IDX_POA):
         return grid.particle_dry_dep[0]
     elif species_idx == IDX_TOTAL_NH:
-        p = grid.NHPartitioning[0]
+        p = _nh_partitioning(grid, partitioning)[0]
         return (1.0 - p) * grid.NH3_dry_dep[0] + p * grid.particle_dry_dep[0]
     elif species_idx == IDX_SO2:
         return grid.SO2_dry_dep[0]
@@ -257,7 +297,7 @@ def _get_dry_dep_velocity_2d(grid: GridData, species_idx: int) -> np.ndarray:
     elif species_idx == IDX_PSO4:
         return grid.particle_dry_dep[0]
     elif species_idx == IDX_TOTAL_NO3:
-        p = _get_no3_partitioning(grid)[0]
+        p = _get_no3_partitioning(grid, partitioning)[0]
         vd_hno3 = _get_hno3_vd(grid)[0]
         return (1.0 - p) * vd_hno3 + p * grid.particle_dry_dep[0]
     elif species_idx == IDX_O3:
@@ -268,7 +308,8 @@ def _get_dry_dep_velocity_2d(grid: GridData, species_idx: int) -> np.ndarray:
     return np.zeros((grid.ny, grid.nx))
 
 
-def _get_wet_dep_rate_3d(grid: GridData, species_idx: int) -> np.ndarray:
+def _get_wet_dep_rate_3d(grid: GridData, species_idx: int,
+                         partitioning: str = "marginal") -> np.ndarray:
     """Get effective wet deposition rate array. Returns (nz, ny, nx)."""
     if species_idx in IDX_VBS_BINS:
         # VBS bin gas/particle partitioning per Pankow. Mirrors the dry-dep
@@ -288,7 +329,7 @@ def _get_wet_dep_rate_3d(grid: GridData, species_idx: int) -> np.ndarray:
     elif species_idx in (IDX_PM25, IDX_POA):
         return grid.particle_wet_dep.copy()
     elif species_idx == IDX_TOTAL_NH:
-        p = grid.NHPartitioning
+        p = _nh_partitioning(grid, partitioning)
         return (1.0 - p) * grid.other_gas_wet_dep + p * grid.particle_wet_dep
     elif species_idx == IDX_SO2:
         return grid.SO2_wet_dep.copy()
@@ -302,7 +343,7 @@ def _get_wet_dep_rate_3d(grid: GridData, species_idx: int) -> np.ndarray:
     elif species_idx == IDX_PSO4:
         return grid.particle_wet_dep.copy()
     elif species_idx == IDX_TOTAL_NO3:
-        p = _get_no3_partitioning(grid)
+        p = _get_no3_partitioning(grid, partitioning)
         # Gas fraction (HNO3) scavenges as a soluble gas, symmetric with
         # the TotalNH branch above. HNO3's effective solubility exceeds
         # NH3's, so the soluble-gas rate is still a lower bound; a
@@ -321,7 +362,8 @@ def _get_wet_dep_rate_3d(grid: GridData, species_idx: int) -> np.ndarray:
 
 # --- Loop version for equivalence testing ---
 
-def _assemble_deposition_loop(grid: GridData, indexer: CellIndexer, species_idx: int) -> sp.csc_matrix:
+def _assemble_deposition_loop(grid: GridData, indexer: CellIndexer, species_idx: int,
+                              partitioning: str = "marginal") -> sp.csc_matrix:
     nz, ny, nx = grid.nz, grid.ny, grid.nx
     N = indexer.N
     diag = np.zeros(N, dtype=np.float64)
@@ -334,9 +376,9 @@ def _assemble_deposition_loop(grid: GridData, indexer: CellIndexer, species_idx:
                 if k == 0:
                     dz = grid.Dz[0, j, i]
                     if dz > 0:
-                        vd = _get_dry_dep_velocity_scalar(grid, species_idx, j, i)
+                        vd = _get_dry_dep_velocity_scalar(grid, species_idx, j, i, partitioning)
                         rate += vd / dz
-                wd = _get_wet_dep_rate_scalar(grid, species_idx, k, j, i)
+                wd = _get_wet_dep_rate_scalar(grid, species_idx, k, j, i, partitioning)
                 rate += wd
                 diag[n] = rate
 
@@ -344,7 +386,7 @@ def _assemble_deposition_loop(grid: GridData, indexer: CellIndexer, species_idx:
     return sp.csc_matrix((diag, (indices, indices)), shape=(N, N))
 
 
-def _get_dry_dep_velocity_scalar(grid, species_idx, j, i):
+def _get_dry_dep_velocity_scalar(grid, species_idx, j, i, partitioning="marginal"):
     # Loop form, used only for equivalence testing. Delegates to the
     # vectorized dispatch for new species to avoid duplicating logic.
     if species_idx in IDX_VBS_BINS:
@@ -352,7 +394,7 @@ def _get_dry_dep_velocity_scalar(grid, species_idx, j, i):
     elif species_idx in (IDX_PM25, IDX_POA):
         return grid.particle_dry_dep[0, j, i]
     elif species_idx == IDX_TOTAL_NH:
-        p = grid.NHPartitioning[0, j, i]
+        p = _nh_partitioning(grid, partitioning)[0, j, i]
         return (1.0 - p) * grid.NH3_dry_dep[0, j, i] + p * grid.particle_dry_dep[0, j, i]
     elif species_idx == IDX_SO2:
         return grid.SO2_dry_dep[0, j, i]
@@ -361,7 +403,7 @@ def _get_dry_dep_velocity_scalar(grid, species_idx, j, i):
     elif species_idx == IDX_PSO4:
         return grid.particle_dry_dep[0, j, i]
     elif species_idx == IDX_TOTAL_NO3:
-        return _get_dry_dep_velocity_2d(grid, IDX_TOTAL_NO3)[j, i]
+        return _get_dry_dep_velocity_2d(grid, IDX_TOTAL_NO3, partitioning)[j, i]
     elif species_idx == IDX_O3:
         return _get_dry_dep_velocity_2d(grid, IDX_O3)[j, i]
     elif species_idx == IDX_CO:
@@ -369,13 +411,13 @@ def _get_dry_dep_velocity_scalar(grid, species_idx, j, i):
     return 0.0
 
 
-def _get_wet_dep_rate_scalar(grid, species_idx, k, j, i):
+def _get_wet_dep_rate_scalar(grid, species_idx, k, j, i, partitioning="marginal"):
     if species_idx in IDX_VBS_BINS:
         return _get_wet_dep_rate_3d(grid, species_idx)[k, j, i]
     elif species_idx in (IDX_PM25, IDX_POA):
         return grid.particle_wet_dep[k, j, i]
     elif species_idx == IDX_TOTAL_NH:
-        p = grid.NHPartitioning[k, j, i]
+        p = _nh_partitioning(grid, partitioning)[k, j, i]
         return (1.0 - p) * grid.other_gas_wet_dep[k, j, i] + p * grid.particle_wet_dep[k, j, i]
     elif species_idx == IDX_SO2:
         return grid.SO2_wet_dep[k, j, i]
@@ -384,7 +426,7 @@ def _get_wet_dep_rate_scalar(grid, species_idx, k, j, i):
     elif species_idx == IDX_PSO4:
         return grid.particle_wet_dep[k, j, i]
     elif species_idx == IDX_TOTAL_NO3:
-        return _get_wet_dep_rate_3d(grid, IDX_TOTAL_NO3)[k, j, i]
+        return _get_wet_dep_rate_3d(grid, IDX_TOTAL_NO3, partitioning)[k, j, i]
     elif species_idx == IDX_O3:
         return 0.0
     elif species_idx == IDX_CO:

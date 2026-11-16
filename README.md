@@ -164,6 +164,12 @@ conda activate orbit
 pip install -e ".[fast,dev]"
 ```
 
+**Windows:** the same commands work in an Anaconda Prompt or PowerShell
+(conda-forge provides `scikit-umfpack` and `pymetis` for Windows too). ORBIT
+is developed and tested on Linux and macOS; Windows has not been tested
+thoroughly, so please [open an issue](https://github.com/SumilThakr/orbit/issues)
+if something does not work.
+
 The last command tells pip to install ORBIT from the current directory
 (`-e .`) together with the optional dependency groups named `fast` (the
 UMFPACK solver backend, already provided by the conda line above) and
@@ -246,6 +252,21 @@ export ORBIT_EMISSION_DIR=$ORBIT_DATA/emissions/sas
 export ORBIT_LUT=$ORBIT_DATA/inputs/isorropia_lut_7d.npz
 export ORBIT_OUTPUT_DIR=./outputs
 ```
+
+On Windows (PowerShell), set the same variables with `$env:`:
+
+```powershell
+$env:ORBIT_DATA = "C:\path\to\orbit_data"
+$env:ORBIT_PREPROC_DIR = "$env:ORBIT_DATA\inputs\grids_2022"
+$env:ORBIT_CONSTANTS = "$env:ORBIT_DATA\inputs\MERRA2.20150101.CN.05x0625.nc4"
+$env:ORBIT_EMISSION_DIR = "$env:ORBIT_DATA\emissions\sas"
+$env:ORBIT_LUT = "$env:ORBIT_DATA\inputs\isorropia_lut_7d.npz"
+$env:ORBIT_OUTPUT_DIR = ".\outputs"
+```
+
+In the commands below, write `$env:ORBIT_DATA` for `$ORBIT_DATA`, and end
+continued lines with a backtick (`` ` ``) instead of a backslash, or put the
+command on one line.
 
 A wrong path fails fast at startup with a message naming the variable. Input
 files are identified by a quick fingerprint (size plus first and last
@@ -666,7 +687,7 @@ Commonly adjusted flags:
 | `--horizontal-fct` | on (forward, zero-out); off (marginal) | flux-corrected horizontal transport; marginal defaults to the monotone low-order linearisation (`--horizontal-fct` / `--no-horizontal-fct` overrides) |
 | `--isorropia-closure-iters N` | 6 | outer closure iterations |
 | `--closure-mode {full,chem-only}` | `full` | what the outer loop refreshes |
-| `--closure-alpha`, `--closure-tol` | 0.5, 0.02 | closure damping and convergence gate (2% on particulate NO3/NH4) |
+| `--closure-alpha`, `--closure-tol` | 0.5, 0.02 | closure damping and convergence gate: 90 % of land surface cells change particulate NO3 and NH4 by less than 2 % (ocean cells are logged, not gated) |
 | `--chemistry-iters N` | 0 | diagnostic-OH path (> 0 not currently in production) |
 | `--mass-balance-tol`, `--allow-mass-imbalance` | 0.05, off | air-mass balance pre-flight on the transport block (p90 of interior row sums, per day) and its override |
 

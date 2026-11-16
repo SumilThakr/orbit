@@ -86,11 +86,6 @@ EMITTED_SPECIES = {
     "NH3":          IDX_TOTAL_NH,
     "SO2":          IDX_SO2,
     "NOx":          IDX_NOX,
-    "VBS_C01":      IDX_VBS_BINS[4],
-    "VBS_C1":       IDX_VBS_BINS[3],
-    "VBS_C10":      IDX_VBS_BINS[2],
-    "VBS_C100":     IDX_VBS_BINS[1],
-    "VBS_C1000":    IDX_VBS_BINS[0],
 }
 
 # Pseudo-species that combine the 5 VBS bins via per-cell, per-bin
@@ -98,8 +93,14 @@ EMITTED_SPECIES = {
 # driver expands the user request to its underlying VBS_C* set,
 # solves those, then combines.
 VOC_PSEUDO_SPECIES = ("VOC_anthro", "VOC_bio", "VOC_bb")
-# Low-to-high C* (matching VBS_PARENT_YIELDS row order).
+# Low-to-high C* (matching VBS_PARENT_YIELDS row order and IDX_VBS_BINS).
 VBS_BIN_KEYS = ("VBS_C01", "VBS_C1", "VBS_C10", "VBS_C100", "VBS_C1000")
+
+# Each VBS key maps to its own bin. Up to 1.0.3 this table was written out
+# in reverse (VBS_C01 -> IDX_VBS_BINS[4], which is C* = 1000), so every
+# VBS_C* adjoint row and the VOC pseudo-species built from them belonged to
+# the opposite bin (1.0.4 item 14).
+EMITTED_SPECIES.update(dict(zip(VBS_BIN_KEYS, IDX_VBS_BINS)))
 
 
 def _compute_voc_yields_per_bin(voc_class: str, grids, bio_voc_split=None):
@@ -171,38 +172,77 @@ def _load_gradient_nc(gradient_path: str) -> tuple:
     return S_per_draw_summed, causes, ages, lat, lon, attrs
 
 
+def _overlap_fractions(fine_c, fine_d, coarse_c, coarse_d):
+    """(n_coarse, n_fine) fraction of each fine cell's width that lies in
+    each coarse cell, for regular 1-D grids given by centres and widths."""
+    f0, f1 = fine_c - fine_d / 2.0, fine_c + fine_d / 2.0
+    c0, c1 = coarse_c - coarse_d / 2.0, coarse_c + coarse_d / 2.0
+    w = (np.minimum(c1[:, None], f1[None, :])
+         - np.maximum(c0[:, None], f0[None, :]))
+    return np.clip(w, 0.0, None) / fine_d
+
+
+def _grid_step(c, fallback):
+    c = np.asarray(c, dtype=np.float64)
+    if c.size < 2:
+        return float(fallback)
+    return float(np.abs(np.median(np.diff(c))))
+
+
+def receptor_R_list(receptors, sp_idx):
+    """Adjoint R list of one species from the per-bin receptors.
+
+    receptors[tau, sp_idx] (from apply_growth_transpose) is built with bin
+    tau's end-of-bin fractions and weights the end-of-bin state c[tau + 1]:
+    J = sum_tau <r_tau, c[tau + 1]>, as marginal mode pairs them. In the
+    recursion lambda_tau = P_tau^T lambda_{tau+1} + R_tau, R_tau weights
+    c[tau], so r_tau goes to R[(tau + 1) % N_BINS] (1.0.4 item 21; until
+    1.0.4 it sat in R[tau]).
+    """
+    return [np.array(receptors[(tau - 1) % N_BINS, sp_idx], dtype=np.float64)
+            for tau in range(N_BINS)]
+
+
 def _regrid_gradient_to_orbit_grid(
-    S_grad: np.ndarray,           # (n_lat_grad, n_lon_grad) at 0.1°
+    S_grad: np.ndarray,           # (n_lat_grad, n_lon_grad), typically 0.1°
     lat_grad: np.ndarray, lon_grad: np.ndarray,
     lat_orbit: np.ndarray, lon_orbit: np.ndarray,
 ) -> np.ndarray:
-    """Conservative-sum regrid of the deaths-gradient from its 0.1° to ORBIT
-    0.5° × 0.625°.
+    """Conservative area-overlap regrid of the deaths gradient onto the
+    ORBIT grid.
 
     S has units of "deaths · year⁻¹ · μg⁻¹ · m³ · cell⁻¹" — per-cell
-    extensive. Summing fine cells into a coarse cell preserves the
-    sensitivity (an aggregate deaths-per-unit-PM in the coarse cell).
+    extensive. Each fine cell's S is split among the ORBIT cells it
+    overlaps in proportion to the overlap area (a product of 1-D lat and
+    lon fractions, since both grids are regular): S_orbit = Wy @ S @ Wx.T.
+    Fine-cell area outside the ORBIT domain is dropped.
 
-    Implementation: build a gradient→orbit cell mapping by nearest-edge,
-    bincount-sum into the coarse layer.
+    Through 1.0.3 each fine cell went wholly to the ORBIT cell with the
+    nearest centre via round(); with aqh's 0.1° lattice every fifth fine row
+    sits exactly on an ORBIT edge and round-half-to-even gave alternate
+    ORBIT rows 6 or 4 fine rows (and columns 6 or 7), striping S by about
+    ±20 % with the domain origin (1.0.4 item 16). A gradient already on the
+    ORBIT grid passes through unchanged.
     """
-    n_orbit_lat, n_orbit_lon = lat_orbit.size, lon_orbit.size
-    # Half-widths of the ORBIT cells.
-    dlat_o = float(lat_orbit[1] - lat_orbit[0])
-    dlon_o = float(lon_orbit[1] - lon_orbit[0])
-
-    out = np.zeros((n_orbit_lat, n_orbit_lon), dtype=np.float64)
-    for i, lat in enumerate(lat_grad):
-        # Which ORBIT lat row contains this gradient row?
-        oi = int(round((lat - lat_orbit[0]) / dlat_o))
-        if not (0 <= oi < n_orbit_lat):
-            continue
-        for j, lon in enumerate(lon_grad):
-            oj = int(round((lon - lon_orbit[0]) / dlon_o))
-            if not (0 <= oj < n_orbit_lon):
-                continue
-            out[oi, oj] += S_grad[i, j]
-    return out
+    lat_grad = np.asarray(lat_grad, dtype=np.float64)
+    lon_grad = np.asarray(lon_grad, dtype=np.float64)
+    lat_orbit = np.asarray(lat_orbit, dtype=np.float64)
+    lon_orbit = np.asarray(lon_orbit, dtype=np.float64)
+    dlat_o = _grid_step(lat_orbit, 1.0)
+    dlon_o = _grid_step(lon_orbit, 1.0)
+    dlat_f = _grid_step(lat_grad, dlat_o)
+    dlon_f = _grid_step(lon_grad, dlon_o)
+    Wy = _overlap_fractions(lat_grad, dlat_f, lat_orbit, dlat_o)   # (ny_o, ny_f)
+    Wx = _overlap_fractions(lon_grad, dlon_f, lon_orbit, dlon_o)   # (nx_o, nx_f)
+    S = np.asarray(S_grad, dtype=np.float64)
+    if not np.isfinite(S).all():
+        # A matrix product would spread one NaN along a whole ORBIT row and
+        # column; refuse rather than guess a fill value.
+        raise ValueError(
+            f"deaths gradient has {int((~np.isfinite(S)).sum())} non-finite "
+            f"cells; fill them (0 where there is no population) before the "
+            f"adjoint reads the file")
+    return Wy @ S @ Wx.T
 
 
 def run_adjoint_month(
@@ -362,10 +402,17 @@ def run_adjoint_month(
         if "M_OA_marg_3d" in orbit_npz.files:
             M_OA_marg_3d = orbit_npz["M_OA_marg_3d"].astype(np.float64)
         for tau in range(N_BINS):
+            # Surface fields too, as marginal.py does: surface dry deposition
+            # of the VBS bins reads F_p_vbs_surface and falls back to the
+            # particle rate without it (deposition.py), so until 1.0.4 the
+            # adjoint deposited organic vapour at the particle rate (Delhi
+            # July VOC_anthro marginal/adjoint 0.73). 1.0.4 item 22.
             if F_p_vbs_marg_3d is not None:
                 grids[tau].F_p_vbs = F_p_vbs_marg_3d[tau]   # (5, nz, ny, nx)
+                grids[tau].F_p_vbs_surface = F_p_vbs_marg_3d[tau][:, 0]
             if M_OA_marg_3d is not None:
                 grids[tau].M_OA_3d = M_OA_marg_3d[tau]      # (nz, ny, nx)
+                grids[tau].M_OA_surface = M_OA_marg_3d[tau][0]
             # Mirror marginal.py:336-344: overwrite NH/NO3 partitioning with
             # the ISORROPIA-marg fields BEFORE assemble_species_operators.
             # The deposition operator uses g.NHPartitioning / NO3Partitioning
@@ -595,9 +642,15 @@ def run_adjoint_month(
                 FCT deferred-correction source if present. Cyclic receivers
                 not yet solved contribute zero this pass (Picard fixes it).
                 """
-                R_list_ = [
-                    receptors_d[tau, sp_idx_].copy() for tau in range(N_BINS)
-                ]
+                # Bin tau's receptor is built with bin tau's end-of-bin
+                # fractions (p_NH4, p_NO3, F_p, 1/D) and weights the state at
+                # the END of bin tau, c[tau + 1], as marginal pairs it
+                # (delta_c_orbit[:, tau + 1]). R_tau in the recursion weights
+                # the START of bin tau, so it goes to R[(tau + 1) % N_BINS],
+                # the same rule as the iso end-of-bin K-blocks below. Until
+                # 1.0.4 it sat in R[tau], one bin early (1.0.4 item 21). The
+                # (lambda - R) gradient identity holds for any R.
+                R_list_ = receptor_R_list(receptors_d, sp_idx_)
                 n_coup = 0
                 for r_idx_ in receivers_for_source.get(sp_idx_, []):
                     if r_idx_ not in lam_per_species_d:

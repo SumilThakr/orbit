@@ -253,11 +253,19 @@ def _vanleer_increment(c_up, c_far_up, c_down):
     return 0.5 * _vanleer_phi(c_up, c_far_up, c_down) * (c_down - c_up)
 
 
-def _horizontal_antidiffusive(grid, c):
+def _horizontal_antidiffusive(grid, c, ghost=None):
     """Per-face anti-diffusive fluxes A_x (x-faces) and A_y (y-faces) and the
     metric weights needed to assemble their divergence.
 
     c : (nz, ny, nx) single-species concentration.
+    ghost : None, or (nz, ny, nx) field whose edge-cell values are the
+        concentration just outside each domain edge (the lateral boundary
+        inflow value c_bc, in the same variable as c). It is the far-upwind
+        cell of the first interior face when the flow enters from that edge,
+        so the face gets a limited high-order correction like any interior
+        face (1.0.4 item 19). None: that face drops to first order (the
+        behaviour through 1.0.3, and the closed-boundary case: a ghost equal
+        to the edge cell gives phi = 0, i.e. the same answer).
     Returns dict with, for each axis, the signed face flux A (high-order minus
     low-order upwind advective flux, positive in +x/+y), and the per-face
     terrain/metric weights (tr_L, tr_R) and inverse spacing.
@@ -274,12 +282,16 @@ def _horizontal_antidiffusive(grid, c):
         # far-upwind neighbours (shifted), boundary-zeroed below
         cLL = np.empty_like(cL); cLL[:, :, 1:] = c[:, :, :-2]; cLL[:, :, 0] = cL[:, :, 0]
         cRR = np.empty_like(cR); cRR[:, :, :-1] = c[:, :, 2:]; cRR[:, :, -1] = cR[:, :, -1]
+        if ghost is not None:
+            cLL[:, :, 0] = ghost[:, :, 0]            # outside the west edge
+            cRR[:, :, -1] = ghost[:, :, -1]          # outside the east edge
 
         phi_L = _vanleer_phi(cL, cLL, cR)            # eastward (L upwind)
         phi_R = _vanleer_phi(cR, cRR, cL)            # westward (R upwind)
-        # boundary faces: no far-upwind cell -> drop to first order
-        phi_L[:, :, 0] = 0.0                         # face m=0: L is boundary cell 0
-        phi_R[:, :, -1] = 0.0                        # face m=nx-2: R is boundary cell nx-1
+        if ghost is None:
+            # no far-upwind cell -> drop to first order
+            phi_L[:, :, 0] = 0.0                     # face m=0: L is boundary cell 0
+            phi_R[:, :, -1] = 0.0                    # face m=nx-2: R is boundary cell nx-1
 
         if use_split:
             up = grid.UAvg_plus[:, :, 1:]            # eastward speed at face
@@ -308,11 +320,15 @@ def _horizontal_antidiffusive(grid, c):
         cN = c[:, 1:, :]
         cSS = np.empty_like(cS); cSS[:, 1:, :] = c[:, :-2, :]; cSS[:, 0, :] = cS[:, 0, :]
         cNN = np.empty_like(cN); cNN[:, :-1, :] = c[:, 2:, :]; cNN[:, -1, :] = cN[:, -1, :]
+        if ghost is not None:
+            cSS[:, 0, :] = ghost[:, 0, :]            # outside the south edge
+            cNN[:, -1, :] = ghost[:, -1, :]          # outside the north edge
 
         phi_S = _vanleer_phi(cS, cSS, cN)            # northward (S upwind)
         phi_N = _vanleer_phi(cN, cNN, cS)            # southward (N upwind)
-        phi_S[:, 0, :] = 0.0
-        phi_N[:, -1, :] = 0.0
+        if ghost is None:
+            phi_S[:, 0, :] = 0.0
+            phi_N[:, -1, :] = 0.0
 
         dy = grid.dy
         if use_split:
@@ -362,17 +378,23 @@ def _net_antidiffusive_into_cells(grid, faces, Cx=None, Cy=None):
     return d
 
 
-def _zalesak_2d(grid, c, faces, dt):
+def _zalesak_2d(grid, c, faces, dt, ghost=None):
     """Zalesak coefficients C_x, C_y in [0,1] so c + dt*d_AD makes no new
     extrema relative to c and its 4-neighbourhood. Steady-state form: bounds
-    taken from the current iterate c (= c_td at convergence)."""
+    taken from the current iterate c (= c_td at convergence). With a ghost
+    field (see _horizontal_antidiffusive) the outside value is the edge
+    cells' neighbour beyond the edge; without one the edge is clamped."""
     nz, ny, nx = grid.nz, grid.ny, grid.nx
-    # neighbour max/min (4-neighbourhood, edge-clamped)
+    # neighbour max/min (4-neighbourhood; beyond the edge: ghost or clamped)
+    gw = c[:, :, :1] if ghost is None else ghost[:, :, :1]
+    ge = c[:, :, -1:] if ghost is None else ghost[:, :, -1:]
+    gs = c[:, :1, :] if ghost is None else ghost[:, :1, :]
+    gn = c[:, -1:, :] if ghost is None else ghost[:, -1:, :]
     stack = [c]
-    stack.append(np.concatenate([c[:, :, :1], c[:, :, :-1]], axis=2))   # west
-    stack.append(np.concatenate([c[:, :, 1:], c[:, :, -1:]], axis=2))   # east
-    stack.append(np.concatenate([c[:, :1, :], c[:, :-1, :]], axis=1))   # south
-    stack.append(np.concatenate([c[:, 1:, :], c[:, -1:, :]], axis=1))   # north
+    stack.append(np.concatenate([gw, c[:, :, :-1]], axis=2))   # west
+    stack.append(np.concatenate([c[:, :, 1:], ge], axis=2))    # east
+    stack.append(np.concatenate([gs, c[:, :-1, :]], axis=1))   # south
+    stack.append(np.concatenate([c[:, 1:, :], gn], axis=1))    # north
     s = np.stack(stack, axis=0)
     c_max = s.max(axis=0)
     c_min = s.min(axis=0)
@@ -434,7 +456,8 @@ def _state_weights(grid, N):
     return np.ones(N)
 
 
-def compute_horizontal_fct_source(grid, indexer, c_flat, dt, limited=True):
+def compute_horizontal_fct_source(grid, indexer, c_flat, dt, limited=True,
+                                  c_ghost_flat=None):
     """Deferred-correction FCT source d_AD = -div(C⊙A) for one species.
 
     c_flat : (N,) concentration in indexer order.
@@ -448,14 +471,21 @@ def compute_horizontal_fct_source(grid, indexer, c_flat, dt, limited=True):
     variable of the pressure measure, x = c / rho, and the tendency is
     returned for c (multiplied by rho), matching the transformed transport
     block (operator.assemble_transport_block).
+
+    c_ghost_flat : optional (N,) concentration whose edge-cell values are the
+    lateral boundary inflow concentration c_bc (cli passes it when
+    ORBIT_LATERAL_BC is set); see _horizontal_antidiffusive.
     """
     nz, ny, nx = grid.nz, grid.ny, grid.nx
     N = nz * ny * nx
     rho = _state_weights(grid, N)
     c = (np.asarray(c_flat, dtype=np.float64) / rho).reshape(nz, ny, nx)
-    faces = _horizontal_antidiffusive(grid, c)
+    ghost = None
+    if c_ghost_flat is not None:
+        ghost = (np.asarray(c_ghost_flat, dtype=np.float64) / rho).reshape(nz, ny, nx)
+    faces = _horizontal_antidiffusive(grid, c, ghost)
     if limited:
-        Cx, Cy = _zalesak_2d(grid, c, faces, dt)
+        Cx, Cy = _zalesak_2d(grid, c, faces, dt, ghost)
     else:
         Cx = Cy = None
     d = _net_antidiffusive_into_cells(grid, faces, Cx, Cy)

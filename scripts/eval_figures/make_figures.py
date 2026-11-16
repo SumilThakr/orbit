@@ -71,8 +71,11 @@ def add_geo(ax, lon, lat):
     ax.add_feature(cfeature.BORDERS, linewidth=0.4, edgecolor="0.25")
     ax.add_feature(cfeature.COASTLINE, linewidth=0.4)
     ax.add_feature(cfeature.OCEAN, facecolor="lightblue", alpha=0.3)
-    ax.set_extent([float(lon.min()), float(lon.max()),
-                   float(lat.min()), 36.0], crs=PROJ)
+    # Full grid, to the outer cell edges (the extent used to stop at 36 N).
+    dlon = float(lon[1] - lon[0]) / 2.0
+    dlat = float(lat[1] - lat[0]) / 2.0
+    ax.set_extent([float(lon.min()) - dlon, float(lon.max()) + dlon,
+                   float(lat.min()) - dlat, float(lat.max()) + dlat], crs=PROJ)
     gl = ax.gridlines(draw_labels=True, linewidth=0.3, alpha=0.4)
     gl.top_labels = False
     gl.right_labels = False

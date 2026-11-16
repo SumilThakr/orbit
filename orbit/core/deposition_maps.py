@@ -60,8 +60,13 @@ UG_M2_S_TO_KG_HA_YR = 315.576
 UG_M2_S_TO_G_M2_YR = 31.5576
 
 
-def compute_deposition_maps(orbits, grids, indexer) -> Dict[str, np.ndarray]:
+def compute_deposition_maps(orbits, grids, indexer,
+                            partitioning: str = "equilibrium") -> Dict[str, np.ndarray]:
     """Orbit-mean dry and wet deposition flux maps.
+
+    The flux of the mass present uses the equilibrium ISORROPIA fractions
+    for TotalNH / TotalNO3, matching the forward operator from 1.0.4
+    (item 1; through 1.0.3 both used the marginal fractions).
 
     Parameters
     ----------
@@ -102,11 +107,11 @@ def compute_deposition_maps(orbits, grids, indexer) -> Dict[str, np.ndarray]:
             c3 = c.reshape((nz, ny, nx))
 
             # Dry: surface layer only. vd * c[0] already has per-area units.
-            vd = _get_dry_dep_velocity_2d(grid, s)
+            vd = _get_dry_dep_velocity_2d(grid, s, partitioning)
             dry[s] += vd * c3[0]
 
             # Wet: column integral of rate * concentration * layer thickness.
-            wd = _get_wet_dep_rate_3d(grid, s)
+            wd = _get_wet_dep_rate_3d(grid, s, partitioning)
             wet[s] += np.einsum("zyx,zyx,zyx->yx", wd, c3, grid.Dz)
 
     dry /= n_bins

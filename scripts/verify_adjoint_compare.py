@@ -57,7 +57,14 @@ def main(argv: list[str] | None = None) -> int:
                     help="0-based lat index of the perturbation cell.")
     ap.add_argument("--lon-idx", type=int, required=True,
                     help="0-based lon index of the perturbation cell.")
+    ap.add_argument("--pert-var", default=None,
+                    help="Variable name in the perturbation NetCDF when it "
+                         "differs from --species (e.g. VOC for VOC_anthro).")
+    ap.add_argument("--rh35", action="store_true",
+                    help="Forward side uses delta_pm25_rh35_orbit (for an "
+                         "adjoint run with --pm25-rh35, the production setting).")
     args = ap.parse_args(argv)
+    pert_var = args.pert_var or args.species
 
     # 1. Load adjoint output.
     ds_adj = xr.open_dataset(args.adjoint)
@@ -86,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     #    - µg/m³/s in solver units (for adjoint multiplication)
     ds_pert = xr.open_dataset(args.perturbation)
     pert_value = float(
-        ds_pert[args.species].values[0, args.lat_idx, args.lon_idx]
+        ds_pert[pert_var].values[0, args.lat_idx, args.lon_idx]
     )   # kg/m²/s
     ds_pert.close()
 
@@ -104,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     from orbit.emissions.netcdf import (
         ELEMENT_CONVERSION, SPECIES_MAP,
     )
-    species_lower = args.species.lower().replace("_", "").replace("-", "")
+    species_lower = pert_var.lower().replace("_", "").replace("-", "")
     legacy_idx = SPECIES_MAP.get(species_lower)
     element_factor = ELEMENT_CONVERSION.get(legacy_idx, 1.0)
     # Solver consumes µg/m³/s, with element-mass conversion ALREADY applied
@@ -135,7 +142,9 @@ def main(argv: list[str] | None = None) -> int:
     # 4. Forward prediction (linearised deaths response).
     marg = np.load(args.marginal, allow_pickle=False)
     # delta_pm25_orbit shape: (8, nz, ny, nx). Surface (z=0), annual mean over bins.
-    delta_pm25_surf_annual = marg["delta_pm25_orbit"][:, 0].mean(axis=0)  # (ny, nx)
+    fwd_key = "delta_pm25_rh35_orbit" if args.rh35 else "delta_pm25_orbit"
+    delta_pm25_surf_annual = marg[fwd_key][:, 0].mean(axis=0)  # (ny, nx)
+    print(f"  forward field:            {fwd_key}")
     if delta_pm25_surf_annual.shape != (ny, nx):
         raise SystemExit(
             f"Shape mismatch: marginal δPM25 surface {delta_pm25_surf_annual.shape} "

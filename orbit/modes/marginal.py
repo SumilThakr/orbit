@@ -563,6 +563,12 @@ def run_marginal_month(
 
     # Shared LU cache across all solve passes (L_low is fixed → factor once).
     _lu_holder: Dict[str, Optional[Dict[int, list]]] = {"lu": None}
+    # Iso-cyclic Picard bookkeeping over every _solve_pass call (one call
+    # without FCT, one per deferred-correction solve with it). Saved as
+    # picard_iters (last pass), picard_iters_max, picard_converged (all
+    # passes) and picard_final_change (last pass). Until 1.0.4 these keys
+    # were read from timings but never set, so every NPZ said 1 / True / 0.
+    _picard_log: list = []
 
     def _solve_pass(extra_rhs_fct):
         """One marginal solve (iso-cyclic Picard handled internally) with an
@@ -602,6 +608,8 @@ def run_marginal_month(
                 seed_orbits = {
                     s: [c.copy() for c in new_orbits[s]] for s in cyclic_species
                 }
+            _picard_log.append((picard_it + 1, max_rel,
+                                bool(picard_it > 0 and max_rel < picard_rel_tol)))
             return res
         res = solve_orbit_all_species(
             L_species_per_bin, K_sources_per_bin, delta_e_SN, N,
@@ -745,6 +753,16 @@ def run_marginal_month(
     else:
         result = _solve_pass(None)
     timings["solve"] = time.time() - t0
+    if _picard_log:
+        timings["picard_iters"] = _picard_log[-1][0]
+        timings["picard_iters_max"] = max(p[0] for p in _picard_log)
+        timings["picard_final_change"] = _picard_log[-1][1]
+        timings["picard_converged"] = all(p[2] for p in _picard_log)
+        if not timings["picard_converged"] and verbose:
+            print(f"  WARNING: iso-cyclic Picard hit its cap ({picard_max_iters}) "
+                  f"in {sum(not p[2] for p in _picard_log)} of "
+                  f"{len(_picard_log)} solve passes; last change "
+                  f"{_picard_log[-1][1]:.2e} (tol {picard_rel_tol:.0e})")
 
     # 9. Stack δc orbits and compute orbit-mean δc.
     orbits = result["orbits"]
@@ -783,6 +801,8 @@ def run_marginal_month(
         "sign_convention": np.array("perturbation_response"),
         "iso_coupling": np.array(bool(iso_coupling)),
         "picard_iters": np.array(int(timings.get("picard_iters", 1))),
+        "picard_iters_max": np.array(int(timings.get("picard_iters_max",
+                                                     timings.get("picard_iters", 1)))),
         "picard_converged": np.array(bool(timings.get("picard_converged", True))),
         "picard_final_change": np.array(float(timings.get("picard_final_change", 0.0))),
         "picard_rel_tol": np.array(float(picard_rel_tol)),

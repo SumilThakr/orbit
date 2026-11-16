@@ -10,7 +10,7 @@ Reference: Patankar, S.V. (1980) Numerical Heat Transfer and Fluid Flow, Ch. 5.
 import numpy as np
 import scipy.sparse as sp
 from orbit.core.indexing import CellIndexer
-from orbit.core.grid_data import GridData, EARTH_RADIUS, DEG_TO_RAD
+from orbit.core.grid_data import GridData, EARTH_RADIUS, DEG_TO_RAD, edge_face
 
 
 def _patankar_A(pe_abs: np.ndarray) -> np.ndarray:
@@ -228,14 +228,14 @@ def assemble_horizontal_convdiff(
         bnd_e[:, :, :-1] = False  # only i=nx-1
         if use_split:
             up_bnd = np.zeros((nz, ny, nx), dtype=np.float64)
-            up_bnd[:, :, -1] = grid.UAvg_plus[:, :, -1]
+            up_bnd[:, :, -1] = edge_face(grid, "U_plus")
             bnd_e_loss = bnd_e & (up_bnd > 0)
             if np.any(bnd_e_loss):
                 safe_dx_bnd = np.where(dx_3d > 0, dx_3d, 1.0)
                 diag += np.where(bnd_e_loss, up_bnd / safe_dx_bnd, 0.0)
         elif nx > 1:
             ue_bnd = np.zeros((nz, ny, nx), dtype=np.float64)
-            ue_bnd[:, :, -1] = U[:, :, -1]
+            ue_bnd[:, :, -1] = edge_face(grid, "U")
             bnd_e_loss = bnd_e & (ue_bnd >= 0)
             if np.any(bnd_e_loss):
                 safe_dx_bnd = np.where(dx_3d > 0, dx_3d, 1.0)
@@ -349,14 +349,14 @@ def assemble_horizontal_convdiff(
     if use_split:
         # Split-flux: outflux at north boundary = VAvg_plus (northward component)
         vp_bnd = np.zeros((nz, ny, nx), dtype=np.float64)
-        vp_bnd[:, -1, :] = grid.VAvg_plus[:, -1, :]
+        vp_bnd[:, -1, :] = edge_face(grid, "V_plus")
         bnd_n_loss = bnd_n & (vp_bnd > 0)
         if np.any(bnd_n_loss):
             safe_dy_val = dy if dy > 0 else 1.0
             diag += np.where(bnd_n_loss, vp_bnd / safe_dy_val * tr_bnd_n, 0.0)
     elif ny > 1:
         vn_bnd = np.zeros((nz, ny, nx), dtype=np.float64)
-        vn_bnd[:, -1, :] = V[:, -1, :]
+        vn_bnd[:, -1, :] = edge_face(grid, "V")
         bnd_n_loss = bnd_n & (vn_bnd >= 0)
         if np.any(bnd_n_loss):
             safe_dy_val = dy if dy > 0 else 1.0
